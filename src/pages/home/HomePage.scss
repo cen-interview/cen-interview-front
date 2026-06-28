@@ -1,0 +1,506 @@
+@use 'sass:color';
+
+@import url('https://fonts.googleapis.com/css2?family=Gothic+A1:wght@400;600;700;800&family=Press+Start+2P&display=swap');
+
+$accent: #2b54e6;
+$ink: #14213d;
+$muted: #5a6b8c;
+$page-background: #f4f8ff;
+
+@keyframes mascot-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-14px);
+  }
+}
+
+@keyframes pixel-blink {
+  0%,
+  100% {
+    opacity: 0.15;
+    transform: scale(0.85);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+.home {
+  --home-accent: #{$accent};
+
+  position: relative;
+  display: flex;
+  min-height: 100svh;
+  flex-direction: column;
+  overflow: hidden;
+  color: $ink;
+  background: $page-background;
+  font-family: 'Gothic A1', sans-serif;
+
+  &__dot-pattern {
+    position: absolute;
+    z-index: 0;
+    inset: 0;
+    background-image: radial-gradient(
+      circle,
+      rgba($accent, 0.26) 1.6px,
+      transparent 1.6px
+    );
+    background-size: 30px 30px;
+    mask-image: radial-gradient(120% 90% at 70% 30%, #000 0%, transparent 70%);
+    opacity: 0.6;
+    pointer-events: none;
+  }
+
+  &__pixel,
+  .mascot-stage__pixel {
+    position: absolute;
+    z-index: 1;
+    display: block;
+    animation: pixel-blink 4.5s ease-in-out infinite;
+  }
+
+  &__pixel {
+    &--left-top {
+      top: 30%;
+      left: 7%;
+      width: 14px;
+      height: 14px;
+      background: color.mix(white, $accent, 30%);
+    }
+
+    &--left-bottom {
+      bottom: 35%;
+      left: 14%;
+      width: 10px;
+      height: 10px;
+      background: color.mix(white, $accent, 60%);
+      animation-delay: 0.8s;
+      animation-duration: 5.5s;
+    }
+
+    &--right-bottom {
+      right: 9%;
+      bottom: 16%;
+      width: 16px;
+      height: 16px;
+      background: color.mix(white, $accent, 70%);
+      animation-delay: 0.4s;
+      animation-duration: 6s;
+    }
+  }
+
+  &__header {
+    position: relative;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 26px 56px;
+  }
+
+  &__my-page-link {
+    color: $muted;
+    font-size: 15px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: color 150ms ease;
+
+    &:hover {
+      color: $ink;
+    }
+
+    &:focus-visible {
+      border-radius: 4px;
+      outline: 3px solid rgba($accent, 0.25);
+      outline-offset: 5px;
+    }
+  }
+
+  &__main {
+    position: relative;
+    z-index: 5;
+    display: flex;
+    width: 100%;
+    max-width: 1280px;
+    flex: 1;
+    align-items: center;
+    justify-content: space-between;
+    gap: 56px;
+    margin: 0 auto;
+    padding: 24px 56px 72px;
+  }
+
+  &__content {
+    max-width: 580px;
+  }
+
+  &__eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    margin: 0;
+    padding: 8px 15px;
+    border-radius: 999px;
+    color: $accent;
+    background: color.mix(white, $accent, 89%);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+
+    span {
+      width: 9px;
+      height: 9px;
+      background: $accent;
+    }
+  }
+
+  &__title {
+    margin: 26px 0 0;
+    color: $ink;
+    font-size: clamp(44px, 4.7vw, 56px);
+    font-weight: 800;
+    letter-spacing: -1px;
+    line-height: 1.14;
+
+    > span {
+      display: block;
+    }
+
+    strong {
+      color: $accent;
+      font-weight: inherit;
+    }
+  }
+
+  &__description {
+    max-width: 420px;
+    margin: 22px 0 0;
+    color: $muted;
+    font-size: 18px;
+    line-height: 1.7;
+  }
+
+  &__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-top: 38px;
+  }
+
+  &__button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 14px;
+    font-size: 16px;
+    font-weight: 700;
+    text-decoration: none;
+    transition:
+      transform 150ms ease,
+      border-color 150ms ease,
+      background 150ms ease,
+      box-shadow 150ms ease;
+
+    &:hover {
+      transform: translateY(-2px);
+    }
+
+    &:focus-visible {
+      outline: 3px solid rgba($accent, 0.3);
+      outline-offset: 4px;
+    }
+
+    &--primary {
+      gap: 10px;
+      padding: 17px 30px;
+      color: white;
+      background: $accent;
+      box-shadow: 0 10px 24px -8px rgba($accent, 0.6);
+
+      &:hover {
+        background: color.adjust($accent, $lightness: -7%);
+        box-shadow: 0 16px 30px -8px rgba($accent, 0.65);
+      }
+    }
+
+    &--secondary {
+      padding: 17px 28px;
+      border: 1.5px solid #d8e3fa;
+      color: $ink;
+      background: white;
+
+      &:hover {
+        border-color: $accent;
+      }
+    }
+  }
+
+  &__button-arrow {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 9px;
+    transform: translateY(1px);
+  }
+
+  &__footer {
+    position: relative;
+    z-index: 5;
+    padding: 0 56px 28px;
+    color: #9db0d0;
+    font-family: 'Press Start 2P', monospace;
+    font-size: 9px;
+    letter-spacing: 0.5px;
+  }
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  color: $ink;
+  text-decoration: none;
+
+  &:focus-visible {
+    border-radius: 4px;
+    outline: 3px solid rgba($accent, 0.25);
+    outline-offset: 5px;
+  }
+
+  &__symbol {
+    display: grid;
+    grid-template-columns: repeat(2, 11px);
+    grid-template-rows: repeat(2, 11px);
+    gap: 3px;
+
+    i {
+      background: $accent;
+
+      &:nth-child(2),
+      &:nth-child(3) {
+        background: color.mix(white, $accent, 55%);
+      }
+    }
+  }
+
+  &__name {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 14px;
+    letter-spacing: 0.5px;
+  }
+}
+
+.mascot-stage {
+  position: relative;
+  display: flex;
+  width: 420px;
+  height: 440px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+
+  &__backdrop,
+  &__grid {
+    position: absolute;
+    width: 360px;
+    height: 360px;
+    border-radius: 50px;
+  }
+
+  &__backdrop {
+    background: linear-gradient(160deg, #eaf1ff 0%, #dce8ff 100%);
+    box-shadow: inset 0 0 0 1.5px #e0e9fb;
+  }
+
+  &__grid {
+    overflow: hidden;
+    background-image:
+      linear-gradient(rgba($accent, 0.14) 1px, transparent 1px),
+      linear-gradient(90deg, rgba($accent, 0.14) 1px, transparent 1px);
+    background-size: 24px 24px;
+    opacity: 0.5;
+  }
+
+  &__status {
+    position: absolute;
+    z-index: 4;
+    top: 30px;
+    left: 50%;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    color: $ink;
+    background: white;
+    box-shadow: 0 6px 16px -6px rgba($ink, 0.25);
+    font-size: 13px;
+    font-weight: 700;
+    transform: translateX(-50%);
+    white-space: nowrap;
+
+    span {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #22c36b;
+      animation: status-pulse 2s ease-in-out infinite;
+    }
+  }
+
+  &__image {
+    position: relative;
+    z-index: 3;
+    width: 320px;
+    height: 320px;
+    animation: mascot-float 5s ease-in-out infinite;
+    filter: drop-shadow(0 18px 22px rgba($ink, 0.18));
+    image-rendering: pixelated;
+    object-fit: contain;
+  }
+
+  &__pixel {
+    z-index: 4;
+
+    &--top {
+      top: 90px;
+      right: 34px;
+      width: 12px;
+      height: 12px;
+      background: $accent;
+      animation-duration: 4s;
+    }
+
+    &--bottom {
+      bottom: 84px;
+      left: 30px;
+      width: 10px;
+      height: 10px;
+      background: color.mix(white, $accent, 45%);
+      animation-delay: 1s;
+      animation-duration: 5s;
+    }
+  }
+}
+
+@media (max-width: 900px) {
+  .home {
+    &__main {
+      flex-direction: column;
+      justify-content: center;
+      gap: 20px;
+      padding-top: 48px;
+      text-align: center;
+    }
+
+    &__content,
+    &__description {
+      max-width: 620px;
+    }
+
+    &__eyebrow {
+      margin-inline: auto;
+    }
+
+    &__actions {
+      justify-content: center;
+    }
+  }
+
+  .mascot-stage {
+    width: min(420px, 100%);
+  }
+}
+
+@media (max-width: 560px) {
+  .home {
+    &__header {
+      padding: 22px 20px;
+    }
+
+    &__main {
+      padding: 28px 20px 48px;
+    }
+
+    &__title {
+      font-size: clamp(38px, 11vw, 48px);
+    }
+
+    &__description {
+      font-size: 16px;
+    }
+
+    &__actions {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    &__button {
+      width: 100%;
+    }
+
+    &__footer {
+      padding: 0 20px 22px;
+    }
+  }
+
+  .brand {
+    &__name {
+      font-size: 12px;
+    }
+  }
+
+  .mascot-stage {
+    height: 350px;
+
+    &__backdrop,
+    &__grid {
+      width: min(320px, calc(100vw - 48px));
+      height: 320px;
+      border-radius: 40px;
+    }
+
+    &__image {
+      width: min(280px, calc(100vw - 80px));
+      height: 280px;
+    }
+
+    &__status {
+      top: 4px;
+    }
+
+    &__pixel--top {
+      right: 8px;
+    }
+
+    &__pixel--bottom {
+      bottom: 34px;
+      left: 8px;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home__pixel,
+  .mascot-stage__image,
+  .mascot-stage__pixel,
+  .mascot-stage__status span {
+    animation: none;
+  }
+}
