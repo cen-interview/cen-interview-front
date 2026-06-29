@@ -14,6 +14,12 @@ function HomePage() {
 
       <AppHeader>
         <nav aria-label="주요 메뉴">
+          <Link className="home__login-link" to={ROUTES.LOGIN}>
+            로그인
+          </Link>
+          <Link className="home__sign-up-link" to={ROUTES.SIGN_UP}>
+            회원가입
+          </Link>
           <Link className="home__my-page-link" to={ROUTES.MY_PAGE}>
             마이페이지
           </Link>

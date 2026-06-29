@@ -103,6 +103,14 @@ $page-background: #f4f8ff;
     }
   }
 
+  nav {
+    display: flex;
+    align-items: center;
+    gap: 28px;
+  }
+
+  &__login-link,
+  &__sign-up-link,
   &__my-page-link {
     color: $muted;
     font-size: 18px;
@@ -118,6 +126,24 @@ $page-background: #f4f8ff;
       border-radius: 4px;
       outline: 3px solid rgba($accent, 0.25);
       outline-offset: 5px;
+    }
+  }
+
+  &__login-link {
+    color: $ink;
+  }
+
+  &__sign-up-link {
+    padding: 10px 18px;
+    border: 1px solid #c8d8f5;
+    border-radius: 12px;
+    color: $accent;
+    background: rgba(white, 0.66);
+
+    &:hover {
+      border-color: $accent;
+      color: $accent;
+      background: white;
     }
   }
 
@@ -385,6 +411,24 @@ $page-background: #f4f8ff;
 
 @media (max-width: 560px) {
   .home {
+    nav {
+      gap: 12px;
+    }
+
+    &__login-link,
+    &__sign-up-link,
+    &__my-page-link {
+      font-size: 14px;
+    }
+
+    &__sign-up-link {
+      padding: 8px 12px;
+    }
+
+    &__my-page-link {
+      display: none;
+    }
+
     &__main {
       padding: 28px 20px 48px;
     }
