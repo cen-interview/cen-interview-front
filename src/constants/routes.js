@@ -5,4 +5,5 @@ export const ROUTES = {
   CHAT_INTERVIEW: '/interview/chat',
   REPORT: '/report/:interviewId',
   MY_PAGE: '/my-page',
+  MY_PAGE_ANALYSIS: '/my-page/analysis',
 }

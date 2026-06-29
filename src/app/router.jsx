@@ -6,6 +6,7 @@ import VoiceInterviewPage from '../pages/interview/VoiceInterviewPage'
 import ChatInterviewPage from '../pages/interview/ChatInterviewPage'
 import ReportPage from '../pages/report/ReportPage'
 import MyPage from '../pages/my-page/MyPage'
+import AnalysisDetailPage from '../pages/my-page/AnalysisDetailPage'
 import NotFoundPage from '../pages/not-found/NotFoundPage'
 import { ROUTES } from '../constants/routes'
 
@@ -21,6 +22,7 @@ export const router = createBrowserRouter([
       { path: ROUTES.CHAT_INTERVIEW, element: <ChatInterviewPage /> },
       { path: ROUTES.REPORT, element: <ReportPage /> },
       { path: ROUTES.MY_PAGE, element: <MyPage /> },
+      { path: ROUTES.MY_PAGE_ANALYSIS, element: <AnalysisDetailPage /> },
     ],
   },
 ])

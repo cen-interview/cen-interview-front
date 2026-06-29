@@ -1,0 +1,33 @@
+.app-header {
+  position: relative;
+  z-index: 5;
+  display: flex;
+  width: 100%;
+  height: 84px;
+  flex: 0 0 84px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 64px;
+  border-bottom: 1px solid #d7e5f8;
+  background: rgba(#f6f9ff, 0.66);
+  backdrop-filter: blur(10px);
+
+  &__leading {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 22px;
+  }
+}
+
+@media (max-width: 760px) {
+  .app-header {
+    height: 68px;
+    flex-basis: 68px;
+    padding: 0 20px;
+
+    &__leading {
+      gap: 13px;
+    }
+  }
+}

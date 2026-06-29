@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import chatModeIcon from '../../assets/images/chat-mode.png'
 import mascotImage from '../../assets/images/mascot.gif'
 import voiceModeIcon from '../../assets/images/voice-mode.png'
+import AppHeader from '../../components/common/AppHeader'
 import { ROUTES } from '../../constants/routes'
 import './ModeSelectPage.scss'
 
@@ -49,27 +50,13 @@ function ModeSelectPage() {
         aria-hidden="true"
       />
 
-      <header className="mode-select__header">
-        <Link
-          className="mode-brand"
-          to={ROUTES.HOME}
-          aria-label="코드픽 홈"
-        >
-          <span className="mode-brand__symbol" aria-hidden="true">
-            <i />
-            <i />
-            <i />
-            <i />
-          </span>
-          <span className="mode-brand__name">CODEPICK</span>
-        </Link>
-
+      <AppHeader>
         <nav aria-label="주요 메뉴">
           <Link className="mode-select__my-page-link" to={ROUTES.MY_PAGE}>
             마이페이지
           </Link>
         </nav>
-      </header>
+      </AppHeader>
 
       <main className="mode-select__main">
         <section className="mode-select__content">
@@ -131,7 +118,7 @@ function ModeSelectPage() {
         </aside>
       </main>
 
-      <footer className="mode-select__footer">© CODEPICK</footer>
+      <footer className="mode-select__footer">© CEN-INTERVIEW</footer>
     </div>
   )
 }

@@ -37,8 +37,6 @@ $page-background: #f4f8ff;
   overflow: hidden;
   color: $ink;
   background: $page-background;
-  font-family: 'Gothic A1', sans-serif;
-
   &__dot-pattern {
     position: absolute;
     z-index: 0;
@@ -83,15 +81,6 @@ $page-background: #f4f8ff;
       height: 9px;
       animation-delay: 1.4s;
     }
-  }
-
-  &__header {
-    position: relative;
-    z-index: 5;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 26px 56px;
   }
 
   &__my-page-link {
@@ -139,7 +128,6 @@ $page-background: #f4f8ff;
     border-radius: 999px;
     color: $accent;
     background: color.mix(white, $accent, 89%);
-    font-family: 'Press Start 2P', monospace;
     font-size: 9px;
     letter-spacing: 0.3px;
 
@@ -262,44 +250,7 @@ $page-background: #f4f8ff;
     z-index: 5;
     padding: 0 56px 28px;
     color: #9db0d0;
-    font-family: 'Press Start 2P', monospace;
     font-size: 9px;
-    letter-spacing: 0.5px;
-  }
-}
-
-.mode-brand {
-  display: flex;
-  align-items: center;
-  gap: 13px;
-  color: $ink;
-  text-decoration: none;
-
-  &:focus-visible {
-    border-radius: 4px;
-    outline: 3px solid rgba($accent, 0.25);
-    outline-offset: 5px;
-  }
-
-  &__symbol {
-    display: grid;
-    grid-template-columns: repeat(2, 11px);
-    grid-template-rows: repeat(2, 11px);
-    gap: 3px;
-
-    i {
-      background: $accent;
-
-      &:nth-child(2),
-      &:nth-child(3) {
-        background: color.mix(white, $accent, 55%);
-      }
-    }
-  }
-
-  &__name {
-    font-family: 'Press Start 2P', monospace;
-    font-size: 14px;
     letter-spacing: 0.5px;
   }
 }
@@ -449,10 +400,6 @@ $page-background: #f4f8ff;
 
 @media (max-width: 620px) {
   .mode-select {
-    &__header {
-      padding: 22px 20px;
-    }
-
     &__main {
       padding: 28px 20px 48px;
     }
@@ -493,10 +440,6 @@ $page-background: #f4f8ff;
     &__footer {
       padding: 0 20px 22px;
     }
-  }
-
-  .mode-brand__name {
-    font-size: 12px;
   }
 
   .mode-card {

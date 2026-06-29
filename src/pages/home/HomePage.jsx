@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import mascotImage from '../../assets/images/mascot.gif'
+import AppHeader from '../../components/common/AppHeader'
 import { ROUTES } from '../../constants/routes'
 import './HomePage.scss'
 
@@ -11,23 +12,13 @@ function HomePage() {
       <span className="home__pixel home__pixel--left-bottom" aria-hidden="true" />
       <span className="home__pixel home__pixel--right-bottom" aria-hidden="true" />
 
-      <header className="home__header">
-        <Link className="brand" to={ROUTES.HOME} aria-label="코드픽 홈">
-          <span className="brand__symbol" aria-hidden="true">
-            <i />
-            <i />
-            <i />
-            <i />
-          </span>
-          <span className="brand__name">CEN-INTERVIEW</span>
-        </Link>
-
+      <AppHeader>
         <nav aria-label="주요 메뉴">
           <Link className="home__my-page-link" to={ROUTES.MY_PAGE}>
             마이페이지
           </Link>
         </nav>
-      </header>
+      </AppHeader>
 
       <main className="home__main">
         <section className="home__content">
@@ -71,10 +62,10 @@ function HomePage() {
           <div className="mascot-stage__backdrop" aria-hidden="true" />
           <div className="mascot-stage__grid" aria-hidden="true" />
 
-          <div className="mascot-stage__status">
-            <span aria-hidden="true" />
-            AI 면접관 · 대기중
-          </div>
+          {/*<div className="mascot-stage__status">*/}
+          {/*  <span aria-hidden="true" />*/}
+          {/*  AI 면접관 · 대기중*/}
+          {/*</div>*/}
 
           <img
             className="mascot-stage__image"
@@ -93,7 +84,7 @@ function HomePage() {
         </section>
       </main>
 
-      <footer className="home__footer">© CEN-INTERVIEW</footer>
+      <footer className="home__footer">© 말해보센</footer>
     </div>
   )
 }
