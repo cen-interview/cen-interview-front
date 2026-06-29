@@ -348,6 +348,12 @@ $page-background: #f4f8ff;
 //  }
 //}
 
+.mascot-stage__image {
+  width: 520px;
+  max-width: 100%;
+  height: auto;
+}
+
 @media (max-width: 1100px) {
   .home {
     &__main {
@@ -417,8 +423,7 @@ $page-background: #f4f8ff;
 
     &__image {
       width: 200px;
-      //width: min(280px, calc(100vw - 80px));
-      height: 280px;
+      height: auto;
     }
 
     &__status {

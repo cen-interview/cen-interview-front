@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import reportMascotImage from '../../assets/images/report-mascot.png'
+import analysisMascotImage from '../../assets/images/analysis-mascot.png'
 import AppHeader from '../../components/common/AppHeader'
 import { ROUTES } from '../../constants/routes'
 import './MyPage.scss'
@@ -394,7 +394,7 @@ function MyPage() {
                   </span>
                 </div>
                 <img
-                  src={reportMascotImage}
+                  src={analysisMascotImage}
                   alt="학습 자료를 분석하는 AI 면접관 마스코트"
                 />
               </div>

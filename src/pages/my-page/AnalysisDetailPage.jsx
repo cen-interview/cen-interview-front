@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import reportMascotImage from '../../assets/images/report-mascot.png'
+import analysisMascotImage from '../../assets/images/analysis-mascot.png'
 import AppHeader from '../../components/common/AppHeader'
 import { ROUTES } from '../../constants/routes'
 import './AnalysisDetailPage.scss'
@@ -279,7 +279,7 @@ function AnalysisDetailPage() {
               하나씩 살펴볼까요?
             </div>
             <img
-              src={reportMascotImage}
+              src={analysisMascotImage}
               alt="자료 분석 결과를 안내하는 AI 면접관 마스코트"
             />
           </div>

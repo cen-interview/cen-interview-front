@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import mascotImage from '../../assets/images/mascot.gif'
+import mascotImage from '../../assets/images/home-mascot.gif'
 import AppHeader from '../../components/common/AppHeader'
 import { ROUTES } from '../../constants/routes'
 import './HomePage.scss'
