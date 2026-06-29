@@ -1,4 +1,4 @@
-import mascotImage from '../../assets/images/mascot.gif'
+import mascotImage from '../../assets/images/interview-mascot.gif'
 import AppHeader from '../../components/common/AppHeader'
 import './VoiceInterviewPage.scss'
 
