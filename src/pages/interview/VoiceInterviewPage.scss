@@ -317,6 +317,14 @@ $page-background: #f4f8ff;
     }
   }
 
+  &__placeholder {
+    color: #8290aa;
+  }
+
+  &__error {
+    color: #dc4254;
+  }
+
   &__cursor {
     display: inline-block;
     width: 3px;

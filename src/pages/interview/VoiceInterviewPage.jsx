@@ -1,25 +1,7 @@
 import mascotImage from '../../assets/images/interview-mascot.gif'
 import AppHeader from '../../components/common/AppHeader'
+import useRealtimeTranscription from '../../hooks/useRealtimeTranscription'
 import './VoiceInterviewPage.scss'
-
-const answerParagraphs = [
-  <>
-    네, <strong>REST API와 RESTful API의 차이</strong>에 대해
-    말씀드리겠습니다.
-  </>,
-  <>
-    먼저 REST는 Representational State Transfer의 약자로, 웹에서 자원을
-    이름으로 구분하여 해당 자원의 상태를 주고받는 아키텍처 스타일입니다.
-  </>,
-  <>
-    반면 RESTful API는 REST 원칙을 따르는 API를 의미합니다. 즉, REST는
-    개념이고, RESTful은 그 개념을 따르는 구체적인 설계 방식입니다.
-  </>,
-  <>
-    예를 들어 RESTful API는 HTTP 메서드를 적절히 사용하고, 자원을 URI로
-    표현하며, 무상태성을 유지하는 등의 원칙을 지켜야 합니다.
-  </>,
-]
 
 const waveform = [
   12, 22, 31, 48, 61, 38, 19, 12, 9, 17, 35, 43, 37, 18, 12, 23, 12, 16,
@@ -28,6 +10,25 @@ const waveform = [
 ]
 
 function VoiceInterviewPage() {
+  const { transcript, listening, status, error } =
+    useRealtimeTranscription()
+
+  const recognitionStatus = {
+    connecting: '음성 인식 연결 중',
+    listening: '음성 인식 중',
+    unsupported: '음성 인식 미지원',
+    'permission-denied': '마이크 권한 필요',
+    error: '음성 인식 연결 실패',
+  }[status]
+
+  const recognitionMessage = {
+    connecting: 'OpenAI Realtime에 연결하고 있습니다',
+    listening: '음성을 텍스트로 변환 중입니다',
+    unsupported: '이 브라우저에서는 WebRTC를 사용할 수 없습니다',
+    'permission-denied': '브라우저의 마이크 권한을 허용해 주세요',
+    error: error || '잠시 후 페이지를 새로고침해 주세요',
+  }[status]
+
   return (
     <div className="voice-interview">
       <div className="voice-interview__ambient" aria-hidden="true" />
@@ -88,15 +89,29 @@ function VoiceInterviewPage() {
                 <i />
                 <i />
               </span>
-              음성 인식 중
+              {recognitionStatus}
             </p>
           </header>
 
           <div className="live-answer__copy">
-            {answerParagraphs.map((paragraph, index) => (
-              <p key={index}>{paragraph}</p>
-            ))}
-            <span className="live-answer__cursor" aria-hidden="true" />
+            <p
+              className={
+                error
+                  ? 'live-answer__error'
+                  : !transcript
+                    ? 'live-answer__placeholder'
+                    : undefined
+              }
+            >
+              {transcript ||
+                error ||
+                (status === 'connecting'
+                  ? '음성 인식을 준비하고 있습니다.'
+                  : '마이크에 대고 답변을 시작해 주세요.')}
+              {listening && (
+                <span className="live-answer__cursor" aria-hidden="true" />
+              )}
+            </p>
           </div>
         </section>
       </main>
@@ -125,8 +140,8 @@ function VoiceInterviewPage() {
         </div>
 
         <div className="voice-status__message">
-          <p>답변을 듣고 있어요</p>
-          <span>음성을 텍스트로 변환 중입니다</span>
+          <p>{listening ? '답변을 듣고 있어요' : recognitionStatus}</p>
+          <span>{recognitionMessage}</span>
         </div>
       </section>
     </div>
