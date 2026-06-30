@@ -24,3 +24,8 @@ src/pages/**/*.css
 *.njsproj
 *.sln
 *.sw?
+
+# 환경 변수 파일 (API URL 및 보안 키 포함)
+.env
+.env.*
+!.env.example
