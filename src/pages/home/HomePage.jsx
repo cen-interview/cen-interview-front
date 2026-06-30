@@ -1,10 +1,23 @@
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import mascotImage from '../../assets/images/home-mascot.gif'
 import AppHeader from '../../components/common/AppHeader'
 import { ROUTES } from '../../constants/routes'
 import './HomePage.scss'
+import { useAuthStore } from '../../store/authStore.js'
 
 function HomePage() {
+  const navigate = useNavigate()
+  const accessToken = useAuthStore((state) => state.accessToken)
+  const isLoggedIn = !!accessToken
+
+  const checkLogin = (destination) => {
+    if (isLoggedIn) {
+      navigate(destination)
+      return
+    }
+    navigate(ROUTES.LOGIN)
+  }
+
   return (
     <div className="home">
       <div className="home__dot-pattern" aria-hidden="true" />
@@ -14,15 +27,20 @@ function HomePage() {
 
       <AppHeader>
         <nav aria-label="주요 메뉴">
-          <Link className="home__login-link" to={ROUTES.LOGIN}>
-            로그인
-          </Link>
-          <Link className="home__sign-up-link" to={ROUTES.SIGN_UP}>
-            회원가입
-          </Link>
-          <Link className="home__my-page-link" to={ROUTES.MY_PAGE}>
-            마이페이지
-          </Link>
+          {isLoggedIn ? (
+            <Link className="home__my-page-link" to={ROUTES.MY_PAGE}>
+              마이페이지
+            </Link>
+          ) : (
+            <>
+              <Link className="home__login-link" to={ROUTES.LOGIN}>
+                로그인
+              </Link>
+              <Link className="home__sign-up-link" to={ROUTES.SIGN_UP}>
+                회원가입
+              </Link>
+            </>
+          )}
         </nav>
       </AppHeader>
 
@@ -46,21 +64,23 @@ function HomePage() {
           </p>
 
           <div className="home__actions">
-            <Link
+            <button
+              type="button"
               className="home__button home__button--primary"
-              to={ROUTES.MODE_SELECT}
+              onClick={() => checkLogin(ROUTES.MODE_SELECT)}
             >
               면접 연습하러가기
               <span className="home__button-arrow" aria-hidden="true">
                 ▶
               </span>
-            </Link>
-            <Link
+            </button>
+            <button
+              type="button"
               className="home__button home__button--secondary"
-              to={ROUTES.MY_PAGE}
+              onClick={() => checkLogin(ROUTES.MY_PAGE)}
             >
               연습기록 확인하기
-            </Link>
+            </button>
           </div>
         </section>
 

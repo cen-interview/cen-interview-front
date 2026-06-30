@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom'
 import AppHeader from '../../components/common/AppHeader'
 import { ROUTES } from '../../constants/routes'
 import './LoginPage.scss'
+import { useLoginMutation } from "../../hooks/useLoginMutation";
+
 
 function EyeIcon({ visible }) {
   return (
@@ -17,8 +19,20 @@ function EyeIcon({ visible }) {
 function LoginPage() {
   const [showPassword, setShowPassword] = useState(false)
 
+  const loginMutation = useLoginMutation();
+
   const handleSubmit = (event) => {
     event.preventDefault()
+
+    const formData = new FormData(event.currentTarget);
+
+    const email = formData.get("email");
+    const password = formData.get("password");
+
+    loginMutation.mutate({
+      email,
+      password,
+    });
   }
 
   return (
@@ -82,11 +96,11 @@ function LoginPage() {
 
             <div className="login__options">
               <label className="login__remember">
-                <input type="checkbox" name="remember" />
-                <span className="login__checkbox" aria-hidden="true">
-                  ✓
-                </span>
-                로그인 상태 유지
+                {/*<input type="checkbox" name="remember" />*/}
+                {/*<span className="login__checkbox" aria-hidden="true">*/}
+                {/*  ✓*/}
+                {/*</span>*/}
+                {/*로그인 상태 유지*/}
               </label>
               <button className="login__find-password" type="button">
                 비밀번호 찾기

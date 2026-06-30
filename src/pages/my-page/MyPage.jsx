@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import {Link, useNavigate} from 'react-router-dom'
 import analysisMascotImage from '../../assets/images/analysis-mascot.png'
 import AppHeader from '../../components/common/AppHeader'
 import { ROUTES } from '../../constants/routes'
 import './MyPage.scss'
+import {useAuthStore} from "../../store/authStore.js";
 
 const initialGithubProjects = [
   {
@@ -150,6 +151,14 @@ function MyPage() {
   const [notionDraft, setNotionDraft] = useState('')
   const [githubDraft, setGithubDraft] = useState('')
   const [githubProjects, setGithubProjects] = useState(initialGithubProjects)
+
+  const logout = useAuthStore((state) => state.logout);
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    logout();
+    navigate("/");
+  };
 
   const handleNotionSubmit = (event) => {
     event.preventDefault()
@@ -532,7 +541,7 @@ function MyPage() {
 
         <footer className="my-page__footer">
           <p>계정 이용을 마치셨나요?</p>
-          <button type="button">
+          <button type="button" onClick={handleLogout}>
             <LineIcon name="logout" />
             로그아웃
           </button>

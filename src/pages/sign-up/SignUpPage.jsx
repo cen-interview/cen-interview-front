@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom'
 import AppHeader from '../../components/common/AppHeader'
 import { ROUTES } from '../../constants/routes'
 import './SignUpPage.scss'
+import { useSignUpMutation } from "../../hooks/useSignUpMutation";
+
 
 const agreementItems = [
   { id: 'age', label: '만 14세 이상입니다.', required: true },
@@ -46,8 +48,19 @@ function SignUpPage() {
     setAgreements((current) => ({ ...current, [id]: !current[id] }))
   }
 
+  const signUpMutation = useSignUpMutation();
+
   const handleSubmit = (event) => {
     event.preventDefault()
+    const formData = new FormData(event.currentTarget);
+
+    const signUpData = {
+      email: formData.get("email"),
+      password: formData.get("password"),
+      name: formData.get("nickname"),
+    };
+
+    signUpMutation.mutate(signUpData);
   }
 
   return (

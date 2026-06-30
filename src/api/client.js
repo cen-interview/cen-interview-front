@@ -31,7 +31,6 @@ export const refreshAccessToken = async () => {
         accessToken: access_token,
         refreshToken,
         accessTokenExpiresIn: 60 * 60,
-        keepLogin: !!localStorage.getItem("accessToken"),
     });
 
     return access_token;
