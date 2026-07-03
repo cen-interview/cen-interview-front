@@ -13,6 +13,7 @@ function VoiceInterviewPage() {
   const { transcript, listening, status, error } =
     useRealtimeTranscription()
 
+  // 훅에서 받은 내부 상태를 사용자에게 보여줄 문구로 변환한다.
   const recognitionStatus = {
     connecting: '음성 인식 연결 중',
     listening: '음성 인식 중',
@@ -94,6 +95,7 @@ function VoiceInterviewPage() {
           </header>
 
           <div className="live-answer__copy">
+            {/* 인식 결과가 없을 때는 준비 문구나 연결 오류를 대신 표시한다. */}
             <p
               className={
                 error

@@ -2,16 +2,21 @@ import { useEffect, useState } from 'react'
 import { apiClient } from '../api/client'
 
 const OPENAI_REALTIME_URL = 'https://api.openai.com/v1/realtime/calls'
+// 소리로 인정할 최소 볼륨 기준
 const SILENCE_THRESHOLD = 0.018
+// 말이 끝났다고 판단할지 정하는 값 0.8초
 const SILENCE_DURATION_MS = 800
+// 한 번에 녹음해서 보내는 음성 조각의 최대 길이야. 15초
 const MAX_CHUNK_DURATION_MS = 15000
 
 function useRealtimeTranscription() {
+  // 화면에 전달할 최종 인식 문장과 현재 연결 상태
   const [transcript, setTranscript] = useState('')
   const [status, setStatus] = useState('connecting')
   const [error, setError] = useState('')
 
   useEffect(() => {
+    // 페이지를 벗어날 때 정리해야 하는 브라우저 음성·통신 자원
     let disposed = false
     let peerConnection
     let dataChannel
@@ -25,6 +30,7 @@ function useRealtimeTranscription() {
     let speechStartedAt = 0
     let lastSpeechAt = 0
 
+    // 발화 단위로 받은 텍스트 조각들을 화면에 표시할 한 문장으로 합친다.
     const updateTranscript = () => {
       const nextTranscript = [...segments.values()]
         .sort((first, second) => first.order - second.order)
@@ -37,6 +43,7 @@ function useRealtimeTranscription() {
       }
     }
 
+    // 같은 발화의 delta는 이어 붙이고, completed 이벤트가 오면 최종 문장으로 교체한다.
     const updateSegment = (event, isCompleted = false) => {
       const itemId = event.item_id
 
@@ -53,6 +60,7 @@ function useRealtimeTranscription() {
       updateTranscript()
     }
 
+    // 이 모델은 서버 VAD를 사용하지 않으므로 브라우저가 오디오 구간을 직접 확정한다.
     const commitAudio = () => {
       if (dataChannel?.readyState !== 'open' || !hasSpeech) {
         return
@@ -69,6 +77,7 @@ function useRealtimeTranscription() {
       lastSpeechAt = 0
     }
 
+    // 마이크 음량을 관찰해 무음이 이어지거나 한 구간이 너무 길어지면 commit한다.
     const startVolumeMonitoring = () => {
       audioContext = new AudioContext()
       const source = audioContext.createMediaStreamSource(mediaStream)
@@ -115,11 +124,13 @@ function useRealtimeTranscription() {
 
     const startTranscription = async () => {
       try {
+        // WebRTC 또는 마이크 API가 없는 브라우저에서는 음성 인식을 시작할 수 없다.
         if (!window.RTCPeerConnection || !navigator.mediaDevices?.getUserMedia) {
           setStatus('unsupported')
           return
         }
 
+        // 실제 OpenAI API 키 대신 백엔드가 발급한 짧은 수명의 임시 키만 받는다.
         const tokenResponse = await apiClient.post(
           '/interview/realtime-transcription/token',
         )
@@ -131,6 +142,7 @@ function useRealtimeTranscription() {
           throw new Error('백엔드에서 Realtime 임시 토큰을 받지 못했습니다.')
         }
 
+        // 브라우저 마이크를 열고 기본적인 소음·울림 보정을 적용한다.
         mediaStream = await navigator.mediaDevices.getUserMedia({
           audio: {
             echoCancellation: true,
@@ -144,13 +156,16 @@ function useRealtimeTranscription() {
           return
         }
 
+        // WebRTC 연결에 마이크 오디오 트랙을 추가한다.
         peerConnection = new RTCPeerConnection()
         mediaStream
           .getTracks()
           .forEach((track) => peerConnection.addTrack(track, mediaStream))
 
+        // DataChannel은 세션 설정, commit, 인식 결과 이벤트를 주고받는다.
         dataChannel = peerConnection.createDataChannel('oai-events')
         dataChannel.addEventListener('open', () => {
+          // 한국어 인식과 정확도 우선 설정으로 transcription 세션을 구성한다.
           dataChannel.send(
             JSON.stringify({
               type: 'session.update',
@@ -177,6 +192,7 @@ function useRealtimeTranscription() {
         dataChannel.addEventListener('message', ({ data }) => {
           const event = JSON.parse(data)
 
+          // 말하는 도중 전달되는 부분 문장
           if (
             event.type ===
             'conversation.item.input_audio_transcription.delta'
@@ -184,6 +200,7 @@ function useRealtimeTranscription() {
             updateSegment(event)
           }
 
+          // 하나의 오디오 구간에 대한 최종 문장
           if (
             event.type ===
             'conversation.item.input_audio_transcription.completed'
@@ -207,6 +224,7 @@ function useRealtimeTranscription() {
           }
         })
 
+        // 브라우저가 만든 연결 제안(SDP)을 OpenAI에 보내 연결을 완료한다.
         const offer = await peerConnection.createOffer()
         await peerConnection.setLocalDescription(offer)
 
@@ -247,6 +265,7 @@ function useRealtimeTranscription() {
 
     startTranscription()
 
+    // 페이지 이동 또는 컴포넌트 제거 시 마이크와 실시간 연결을 모두 닫는다.
     return () => {
       disposed = true
 
