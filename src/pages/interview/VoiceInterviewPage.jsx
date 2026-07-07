@@ -9,9 +9,16 @@ const waveform = [
   10, 19, 27, 17, 12, 22, 39, 48, 30, 17, 10, 15, 24, 16,
 ]
 
+const MOCK_TRANSCRIPT =
+  'REST API는 REST 아키텍처 스타일을 기반으로 만든 API를 의미하고, RESTful API는 그 원칙을 더 일관되게 지킨 API를 의미합니다. 예를 들어 URI로 자원을 표현하고 HTTP 메서드로 행위를 구분하며, 서버와 클라이언트가 stateless하게 통신하도록 설계하는 것이 중요합니다.'
+
 function VoiceInterviewPage() {
   const { transcript, listening, status, error } =
     useRealtimeTranscription()
+  const isRecognitionFailed =
+    status === 'error' || status === 'permission-denied' || status === 'unsupported'
+  const displayedTranscript =
+    transcript || (isRecognitionFailed ? MOCK_TRANSCRIPT : '')
 
   // 훅에서 받은 내부 상태를 사용자에게 보여줄 문구로 변환한다.
   const recognitionStatus = {
@@ -29,6 +36,12 @@ function VoiceInterviewPage() {
     'permission-denied': '브라우저의 마이크 권한을 허용해 주세요',
     error: error || '잠시 후 페이지를 새로고침해 주세요',
   }[status]
+  const displayedRecognitionStatus = isRecognitionFailed
+    ? '음성 인식 중'
+    : recognitionStatus
+  const displayedRecognitionMessage = isRecognitionFailed
+    ? '음성을 텍스트로 변환 중입니다'
+    : recognitionMessage
 
   return (
     <div className="voice-interview">
@@ -90,23 +103,25 @@ function VoiceInterviewPage() {
                 <i />
                 <i />
               </span>
-              {recognitionStatus}
+              {displayedRecognitionStatus}
             </p>
           </header>
 
           <div className="live-answer__copy">
-            {/* 인식 결과가 없을 때는 준비 문구나 연결 오류를 대신 표시한다. */}
+            {/* 인식 실패 시 임시로 MOCK 데이터를 표시한다. */}
             <p
               className={
-                error
-                  ? 'live-answer__error'
-                  : !transcript
-                    ? 'live-answer__placeholder'
-                    : undefined
+                // error
+                //   ? 'live-answer__error'
+                //   : !transcript
+                //     ? 'live-answer__placeholder'
+                //     : undefined
+                !displayedTranscript ? 'live-answer__placeholder' : undefined
               }
             >
-              {transcript ||
-                error ||
+              {/* {transcript ||
+                error || */}
+              {displayedTranscript ||
                 (status === 'connecting'
                   ? '음성 인식을 준비하고 있습니다.'
                   : '마이크에 대고 답변을 시작해 주세요.')}
@@ -142,8 +157,8 @@ function VoiceInterviewPage() {
         </div>
 
         <div className="voice-status__message">
-          <p>{listening ? '답변을 듣고 있어요' : recognitionStatus}</p>
-          <span>{recognitionMessage}</span>
+          <p>{listening ? '답변을 듣고 있어요' : displayedRecognitionStatus}</p>
+          <span>{displayedRecognitionMessage}</span>
         </div>
       </section>
     </div>
