@@ -216,7 +216,7 @@ function MyPage() {
               <span aria-hidden="true" />
               나의 성장 대시보드
             </p>
-            <h1>안녕하세요, 김소연님!</h1>
+            <h1>안녕하세요, 김민수님!</h1>
             <p>
               학습 자료와 면접 연습 기록을 한곳에서 관리하고 확인해보세요.
             </p>
@@ -234,7 +234,7 @@ function MyPage() {
             </div>
             <div>
               <div className="profile-card__name-row">
-                <h2>김소연</h2>
+                <h2>김민수</h2>
                 <span>백엔드 취업 준비생</span>
               </div>
               <p>soyeon.dev@example.com</p>
