@@ -1,5 +1,8 @@
+import { useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import mascotImage from '../../assets/images/interview-mascot.gif'
 import AppHeader from '../../components/common/AppHeader'
+import { ROUTES } from '../../constants/routes'
 import useRealtimeTranscription from '../../hooks/useRealtimeTranscription'
 import './VoiceInterviewPage.scss'
 
@@ -12,13 +15,48 @@ const waveform = [
 const MOCK_TRANSCRIPT =
   'REST API는 REST 아키텍처 스타일을 기반으로 만든 API를 의미하고, RESTful API는 그 원칙을 더 일관되게 지킨 API를 의미합니다. 예를 들어 URI로 자원을 표현하고 HTTP 메서드로 행위를 구분하며, 서버와 클라이언트가 stateless하게 통신하도록 설계하는 것이 중요합니다.'
 
+const DEMO_REPORT_ID = 'demo'
+
+const getReportPath = (interviewId) =>
+  ROUTES.REPORT.replace(':interviewId', interviewId)
+
+const isInterviewEndRequest = (text) => {
+  const normalizedText = text.replace(/\s+/g, '')
+
+  return [
+    '면접종료',
+    '면접끝',
+    '종료해줘',
+    '종료해주세요',
+    '끝내줘',
+    '끝내주세요',
+    '리포트보여줘',
+    '리포트보여주세요',
+    '결과보여줘',
+    '결과보여주세요',
+  ].some((keyword) => normalizedText.includes(keyword))
+}
+
 function VoiceInterviewPage() {
+  const navigate = useNavigate()
+  const hasNavigatedToReportRef = useRef(false)
   const { transcript, listening, status, error } =
     useRealtimeTranscription()
   const isRecognitionFailed =
     status === 'error' || status === 'permission-denied' || status === 'unsupported'
   const displayedTranscript =
     transcript || (isRecognitionFailed ? MOCK_TRANSCRIPT : '')
+
+  useEffect(() => {
+    if (hasNavigatedToReportRef.current || !transcript) {
+      return
+    }
+
+    if (isInterviewEndRequest(transcript)) {
+      hasNavigatedToReportRef.current = true
+      navigate(getReportPath(DEMO_REPORT_ID), { replace: true })
+    }
+  }, [navigate, transcript])
 
   // 훅에서 받은 내부 상태를 사용자에게 보여줄 문구로 변환한다.
   const recognitionStatus = {
