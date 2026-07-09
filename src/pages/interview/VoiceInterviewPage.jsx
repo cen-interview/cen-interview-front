@@ -40,6 +40,7 @@ const isInterviewEndRequest = (text) => {
 function VoiceInterviewPage() {
   const navigate = useNavigate()
   const hasNavigatedToReportRef = useRef(false)
+  const reportNavigationTimerRef = useRef()
   const { transcript, listening, status, error } =
     useRealtimeTranscription()
   const isRecognitionFailed =
@@ -48,19 +49,21 @@ function VoiceInterviewPage() {
     transcript || (isRecognitionFailed ? MOCK_TRANSCRIPT : '')
 
   useEffect(() => {
+    return () => {
+      clearTimeout(reportNavigationTimerRef.current)
+    }
+  }, [])
+
+  useEffect(() => {
     if (hasNavigatedToReportRef.current || !transcript) {
       return
     }
 
     if (isInterviewEndRequest(transcript)) {
       hasNavigatedToReportRef.current = true
-      const reportNavigationTimerId = setTimeout(() => {
+      reportNavigationTimerRef.current = setTimeout(() => {
         navigate(getReportPath(DEMO_REPORT_ID), { replace: true })
       }, 1000)
-
-      return () => {
-        clearTimeout(reportNavigationTimerId)
-      }
     }
   }, [navigate, transcript])
 
