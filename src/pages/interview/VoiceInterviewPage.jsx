@@ -54,7 +54,13 @@ function VoiceInterviewPage() {
 
     if (isInterviewEndRequest(transcript)) {
       hasNavigatedToReportRef.current = true
-      navigate(getReportPath(DEMO_REPORT_ID), { replace: true })
+      const reportNavigationTimerId = setTimeout(() => {
+        navigate(getReportPath(DEMO_REPORT_ID), { replace: true })
+      }, 1000)
+
+      return () => {
+        clearTimeout(reportNavigationTimerId)
+      }
     }
   }, [navigate, transcript])
 
