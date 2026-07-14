@@ -132,7 +132,7 @@ function ChatSessionState({ errorMessage, onRetry }) {
 function ChatInterviewPage() {
   const [draft, setDraft] = useState('')
   const [isEndConfirmOpen, setIsEndConfirmOpen] = useState(false)
-  const threadEndRef = useRef(null)
+  const pageEndRef = useRef(null)
   const textareaRef = useRef(null)
   const accessToken = useAuthStore((state) => state.accessToken)
   const navigate = useNavigate()
@@ -157,7 +157,7 @@ function ChatInterviewPage() {
   }, [accessToken, navigate, start])
 
   useEffect(() => {
-    threadEndRef.current?.scrollIntoView({ block: 'end' })
+    pageEndRef.current?.scrollIntoView({ block: 'end' })
   }, [session?.transcript?.length, pendingAnswer, phase])
 
   useEffect(() => {
@@ -310,7 +310,6 @@ function ChatInterviewPage() {
             key={`${turn.role}-${turn.created_at ?? turn.clientEventId}-${turn.question_id ?? index}`}
           />
         ))}
-        <div ref={threadEndRef} aria-hidden="true" />
       </main>
 
       {!session?.finished && (
@@ -348,6 +347,8 @@ function ChatInterviewPage() {
           </p>
         </form>
       )}
+
+      <div ref={pageEndRef} aria-hidden="true" />
 
       {isEndConfirmOpen && (
         <div
