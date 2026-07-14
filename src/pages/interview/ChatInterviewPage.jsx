@@ -21,7 +21,59 @@ const formatMessageTime = (createdAt) => {
   }).format(date)
 }
 
-function ChatMessage({ turn }) {
+const getLastInterviewerTurnIndex = (turns) => {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    if (turns[index].role === 'interviewer') {
+      return index
+    }
+  }
+
+  return -1
+}
+
+function InterviewProgress({ progress, isSubmitting }) {
+  if (!progress) {
+    return null
+  }
+
+  const statusLabel = isSubmitting
+    ? '답변 분석 중'
+    : progress.status === 'completed'
+      ? '면접 완료'
+      : progress.answered_question_count < progress.asked_question_count
+        ? '답변 대기'
+        : '다음 질문 준비 중'
+  const statusModifier = isSubmitting ? 'analyzing' : progress.status
+  const mainQuestion = progress.main_question
+
+  return (
+    <div
+      className="chat-bubble__progress"
+      aria-label={`면접 진행 상태: ${statusLabel}, 메인 질문 ${mainQuestion.current}/${mainQuestion.total}, 답변 ${progress.answered_question_count}/${progress.asked_question_count}`}
+    >
+      <span
+        className={`chat-bubble__progress-status chat-bubble__progress-status--${statusModifier}`}
+      >
+        {statusLabel}
+      </span>
+      <span className="chat-bubble__progress-metric">
+        메인 질문
+        <strong>
+          {mainQuestion.current} / {mainQuestion.total}
+        </strong>
+      </span>
+      <span className="chat-bubble__progress-divider" aria-hidden="true" />
+      <span className="chat-bubble__progress-metric">
+        답변
+        <strong>
+          {progress.answered_question_count} / {progress.asked_question_count}
+        </strong>
+      </span>
+    </div>
+  )
+}
+
+function ChatMessage({ turn, progress, isSubmitting = false }) {
   const isInterviewer = turn.role === 'interviewer'
   const formattedTime = formatMessageTime(turn.created_at)
 
@@ -69,7 +121,10 @@ function ChatMessage({ turn }) {
     <section className="chat-message chat-message--follow-up">
       <InterviewerAvatar small />
       <div className="chat-bubble chat-bubble--interviewer chat-bubble--compact">
-        <p className="chat-bubble__label">AI 면접관</p>
+        <div className="chat-bubble__header">
+          <p className="chat-bubble__label">AI 면접관</p>
+          <InterviewProgress progress={progress} isSubmitting={isSubmitting} />
+        </div>
         <p className="chat-bubble__feedback">{turn.text}</p>
         {formattedTime && (
           <time dateTime={turn.created_at}>{formattedTime}</time>
@@ -279,6 +334,7 @@ function ChatInterviewPage() {
         },
       ]
     : transcript
+  const lastInterviewerTurnIndex = getLastInterviewerTurnIndex(displayedTurns)
 
   return (
     <div className="chat-interview">
@@ -287,7 +343,6 @@ function ChatInterviewPage() {
       <AppHeader>
         <div className="chat-interview__progress" aria-label="면접 진행 상황">
           <p>
-            채팅 면접{' '}
             <strong>{session?.finished ? '완료' : '진행 중'}</strong>
           </p>
           {!session?.finished && (
@@ -304,12 +359,18 @@ function ChatInterviewPage() {
       </AppHeader>
 
       <main className="chat-thread">
-        {displayedTurns.map((turn, index) => (
-          <ChatMessage
-            turn={turn}
-            key={`${turn.role}-${turn.created_at ?? turn.clientEventId}-${turn.question_id ?? index}`}
-          />
-        ))}
+        {displayedTurns.map((turn, index) => {
+          const isCurrentInterviewerTurn = index === lastInterviewerTurnIndex
+
+          return (
+            <ChatMessage
+              turn={turn}
+              progress={isCurrentInterviewerTurn ? session?.progress : null}
+              isSubmitting={isCurrentInterviewerTurn && isSubmitting}
+              key={`${turn.role}-${turn.created_at ?? turn.clientEventId}-${turn.question_id ?? index}`}
+            />
+          )
+        })}
       </main>
 
       {!session?.finished && (
