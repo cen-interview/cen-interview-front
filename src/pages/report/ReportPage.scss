@@ -300,7 +300,7 @@ $orange: #ff7a21;
 
     i {
       display: block;
-      width: 82%;
+      width: var(--overall-score);
       height: 100%;
       border-radius: inherit;
       background: linear-gradient(90deg, #1477f5, #1b83ff);
@@ -321,7 +321,7 @@ $orange: #ff7a21;
   --card-border: #bfe4cf;
 
   display: flex;
-  min-height: 358px;
+  min-height: 260px;
   flex-direction: column;
   padding: 26px 26px 20px;
   border: 1px solid var(--card-border);
@@ -397,6 +397,48 @@ $orange: #ff7a21;
     width: 104px;
     height: 78px;
     margin: auto auto 0;
+  }
+}
+
+.question-section__empty {
+  margin: 0;
+  padding: 32px;
+  border: 1px dashed #cbdcf0;
+  border-radius: 14px;
+  color: #617491;
+  background: #f8fbff;
+  text-align: center;
+}
+
+.report-empty {
+  display: flex;
+  width: min(680px, calc(100% - 40px));
+  min-height: calc(100svh - 84px);
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  margin: 0 auto;
+  text-align: center;
+
+  h1 {
+    margin: 0;
+    color: #173c70;
+    font-size: clamp(25px, 4vw, 38px);
+  }
+
+  p {
+    margin: 18px 0 26px;
+    color: #607795;
+    line-height: 1.7;
+  }
+
+  > a {
+    padding: 13px 20px;
+    border-radius: 12px;
+    color: white;
+    background: $blue;
+    font-weight: 800;
+    text-decoration: none;
   }
 }
 

@@ -1,28 +1,71 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import mascotImage from '../../assets/images/interview-mascot.gif'
 import AppHeader from '../../components/common/AppHeader'
+import { ROUTES } from '../../constants/routes'
+import { saveChatInterviewReport } from '../../features/interview/reportStorage.js'
+import { useChatInterview } from '../../hooks/useChatInterview.js'
+import { useAuthStore } from '../../store/authStore.js'
 import './ChatInterviewPage.scss'
 
-const initialAnswer = `REST API는 리소스 중심의 아키텍처로, HTTP 메서드(GET, POST, PUT, DELETE)를
-사용해 데이터를 CRUD 합니다. 각 엔드포인트는 고정된 구조의 응답을 반환합니다.
-반면 GraphQL은 쿼리 언어를 사용하여 클라이언트가 필요한 데이터만 정확히 요청할 수 있고,
-단일 엔드포인트로 다양한 데이터를 조회할 수 있습니다.
-또한 타입 시스템을 통해 스키마 기반의 강력한 검증과 자동 문서화가 가능합니다.`
+const formatMessageTime = (createdAt) => {
+  const date = new Date(createdAt)
 
-function ClockIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 7v5l3.5 2" />
-    </svg>
-  )
+  if (Number.isNaN(date.getTime())) {
+    return ''
+  }
+
+  return new Intl.DateTimeFormat('ko-KR', {
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date)
 }
 
-function AttachIcon() {
+function ChatMessage({ turn, isOpeningMessage }) {
+  const isInterviewer = turn.role === 'interviewer'
+  const formattedTime = formatMessageTime(turn.created_at)
+
+  if (!isInterviewer) {
+    return (
+      <section className="chat-message chat-message--answer">
+        <div className="chat-bubble chat-bubble--mine">
+          <p className="chat-bubble__label">나의 답변</p>
+          <p className="chat-bubble__answer">{turn.text}</p>
+          <div className="chat-bubble__sent">
+            {formattedTime && (
+              <time dateTime={turn.created_at}>{formattedTime}</time>
+            )}
+            <span aria-label="전송 완료">✓</span>
+          </div>
+        </div>
+      </section>
+    )
+  }
+
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="m20.5 11.5-8.2 8.2a5 5 0 0 1-7.1-7.1l9.1-9.1a3.5 3.5 0 1 1 5 5l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.4-8.4" />
-    </svg>
+    <section
+      className={`chat-message ${
+        isOpeningMessage ? 'chat-message--question' : 'chat-message--follow-up'
+      }`}
+    >
+      <InterviewerAvatar small={!isOpeningMessage} />
+      <div
+        className={`chat-bubble chat-bubble--interviewer${
+          isOpeningMessage ? '' : ' chat-bubble--compact'
+        }`}
+      >
+        <span className="chat-bubble__tail" aria-hidden="true" />
+        <p className="chat-bubble__label">AI 면접관</p>
+        {isOpeningMessage ? (
+          <h1>{turn.text}</h1>
+        ) : (
+          <p className="chat-bubble__feedback">{turn.text}</p>
+        )}
+        {formattedTime && (
+          <time dateTime={turn.created_at}>{formattedTime}</time>
+        )}
+      </div>
+    </section>
   )
 }
 
@@ -40,19 +83,169 @@ function InterviewerAvatar({ small = false }) {
   )
 }
 
+function ChatSessionState({ errorMessage, onRetry }) {
+  const hasError = Boolean(errorMessage)
+
+  return (
+    <div className="chat-interview">
+      <div className="chat-interview__ambient" aria-hidden="true" />
+      <AppHeader />
+
+      <main
+        className="chat-session-state"
+        aria-live="polite"
+        aria-busy={!hasError}
+      >
+        <InterviewerAvatar />
+        <p className="chat-session-state__eyebrow">CHAT INTERVIEW</p>
+        <h1>
+          {hasError
+            ? '면접을 시작하지 못했어요.'
+            : 'AI 면접관이 첫 질문을 준비하고 있어요.'}
+        </h1>
+        <p className="chat-session-state__description">
+          {hasError
+            ? errorMessage
+            : '잠시만 기다리면 채팅 면접이 시작됩니다.'}
+        </p>
+
+        {hasError && (
+          <button type="button" onClick={onRetry}>
+            다시 시도
+          </button>
+        )}
+      </main>
+    </div>
+  )
+}
+
 function ChatInterviewPage() {
   const [draft, setDraft] = useState('')
-  const [submittedAnswer, setSubmittedAnswer] = useState('')
+  const [isEndConfirmOpen, setIsEndConfirmOpen] = useState(false)
+  const threadEndRef = useRef(null)
+  const textareaRef = useRef(null)
+  const accessToken = useAuthStore((state) => state.accessToken)
+  const navigate = useNavigate()
+  const { session, phase, errorMessage, start, submitAnswer, end, retry } =
+    useChatInterview()
 
-  const handleSubmit = (event) => {
+  useEffect(() => {
+    if (!accessToken) {
+      navigate(ROUTES.LOGIN, { replace: true })
+      return
+    }
+
+    start()
+  }, [accessToken, navigate, start])
+
+  useEffect(() => {
+    threadEndRef.current?.scrollIntoView({ block: 'end' })
+  }, [session?.transcript?.length])
+
+  useEffect(() => {
+    if (!session?.finished || !session.report || !session.session_id) {
+      return
+    }
+
+    saveChatInterviewReport(session.session_id, session.report)
+
+    navigate(
+      ROUTES.REPORT.replace(
+        ':interviewId',
+        encodeURIComponent(session.session_id),
+      ),
+      {
+        replace: true,
+        state: {
+          mode: 'chat',
+          report: session.report,
+        },
+      },
+    )
+  }, [navigate, session])
+
+  useEffect(() => {
+    if (!isEndConfirmOpen) {
+      return undefined
+    }
+
+    const handleEscape = (event) => {
+      if (event.key === 'Escape' && phase !== 'ending') {
+        setIsEndConfirmOpen(false)
+      }
+    }
+
+    window.addEventListener('keydown', handleEscape)
+
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [isEndConfirmOpen, phase])
+
+  const handleRetry = async () => {
+    const wasEventRequest = Boolean(session?.session_id)
+    const response = await retry()
+
+    if (response && wasEventRequest) {
+      setDraft('')
+    }
+  }
+
+  if (!accessToken) {
+    return null
+  }
+
+  if (phase === 'idle' || phase === 'starting') {
+    return <ChatSessionState />
+  }
+
+  if (phase === 'error') {
+    return (
+      <ChatSessionState errorMessage={errorMessage} onRetry={handleRetry} />
+    )
+  }
+
+  const handleSubmit = async (event) => {
     event.preventDefault()
 
     const answer = draft.trim()
     if (!answer) return
 
-    setSubmittedAnswer(answer)
-    setDraft('')
+    const response = await submitAnswer(answer)
+
+    if (response) {
+      setDraft('')
+
+      if (!response.finished) {
+        window.requestAnimationFrame(() => textareaRef.current?.focus())
+      }
+    }
   }
+
+  const handleAnswerKeyDown = (event) => {
+    if (
+      event.key !== 'Enter' ||
+      event.shiftKey ||
+      event.nativeEvent.isComposing ||
+      event.repeat
+    ) {
+      return
+    }
+
+    event.preventDefault()
+    event.currentTarget.form?.requestSubmit()
+  }
+
+  const handleConfirmEnd = async () => {
+    const response = await end()
+
+    if (response) {
+      setIsEndConfirmOpen(false)
+    }
+  }
+
+  const transcript = session?.transcript ?? []
+  const isSubmitting = phase === 'submitting'
+  const isEnding = phase === 'ending'
+  const isBusy = isSubmitting || isEnding
 
   return (
     <div className="chat-interview">
@@ -61,103 +254,111 @@ function ChatInterviewPage() {
       <AppHeader>
         <div className="chat-interview__progress" aria-label="면접 진행 상황">
           <p>
-            질문 <strong>2</strong> / 5
+            채팅 면접{' '}
+            <strong>{session?.finished ? '완료' : '진행 중'}</strong>
           </p>
-          <span aria-hidden="true" />
-          <time dateTime="PT4M32S">
-            <ClockIcon />
-            00:04:32
-          </time>
+          {!session?.finished && (
+            <button
+              className="chat-interview__end-button"
+              type="button"
+              disabled={isBusy}
+              onClick={() => setIsEndConfirmOpen(true)}
+            >
+              면접 종료
+            </button>
+          )}
         </div>
       </AppHeader>
 
       <main className="chat-thread">
-        <section className="chat-message chat-message--question">
-          <InterviewerAvatar />
-          <div className="chat-bubble chat-bubble--interviewer">
-            <span className="chat-bubble__tail" aria-hidden="true" />
-            <p className="chat-bubble__label">AI 면접관</p>
-            <h1>REST API와 GraphQL의 차이를 설명해보세요.</h1>
-            <time dateTime="10:30">오전 10:30</time>
-          </div>
-        </section>
-
-        <section className="chat-message chat-message--answer">
-          <div className="chat-bubble chat-bubble--mine">
-            <p className="chat-bubble__label">나의 답변</p>
-            <p className="chat-bubble__answer">{initialAnswer}</p>
-            <div className="chat-bubble__sent">
-              <time dateTime="10:33">오전 10:33</time>
-              <span aria-label="전송 완료">✓</span>
-            </div>
-          </div>
-        </section>
-
-        <section className="chat-message chat-message--follow-up">
-          <InterviewerAvatar small />
-          <div className="chat-bubble chat-bubble--interviewer chat-bubble--compact">
-            <span className="chat-bubble__tail" aria-hidden="true" />
-            <p className="chat-bubble__label">AI 면접관</p>
-            <p className="chat-bubble__feedback">
-              좋은 답변입니다! 핵심 차이를 잘 짚어주셨네요.
-              <br />
-              각 방식의 장단점을 구체적인 예시와 함께 설명해볼 수 있을까요?
-            </p>
-            <time dateTime="10:34">오전 10:34</time>
-          </div>
-        </section>
-
-        {submittedAnswer && (
-          <section className="chat-message chat-message--answer chat-message--new">
-            <div className="chat-bubble chat-bubble--mine">
-              <p className="chat-bubble__label">나의 답변</p>
-              <p className="chat-bubble__answer">{submittedAnswer}</p>
-              <div className="chat-bubble__sent">
-                <span>방금</span>
-                <span aria-label="전송 완료">✓</span>
-              </div>
-            </div>
-          </section>
-        )}
+        {transcript.map((turn, index) => (
+          <ChatMessage
+            turn={turn}
+            isOpeningMessage={index === 0 && turn.role === 'interviewer'}
+            key={`${turn.role}-${turn.created_at}-${turn.question_id ?? index}`}
+          />
+        ))}
+        <div ref={threadEndRef} aria-hidden="true" />
       </main>
 
-      <form className="chat-composer" onSubmit={handleSubmit}>
-        <div className="chat-composer__row">
-          <div className="chat-composer__field">
-            <textarea
-              aria-label="면접 답변"
-              maxLength={2000}
-              onChange={(event) => setDraft(event.target.value)}
-              placeholder="답변을 입력해보세요"
-              rows={1}
-              value={draft}
-            />
+      {!session?.finished && (
+        <form className="chat-composer" onSubmit={handleSubmit}>
+          <div className="chat-composer__row">
+            <div className="chat-composer__field">
+              <textarea
+                ref={textareaRef}
+                aria-label="면접 답변"
+                disabled={isBusy}
+                maxLength={2000}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={handleAnswerKeyDown}
+                placeholder="답변을 입력해보세요"
+                rows={1}
+                value={draft}
+              />
+            </div>
             <button
-              className="chat-composer__attach"
-              type="button"
-              aria-label="파일 첨부"
+              className="chat-composer__submit"
+              type="submit"
+              disabled={!draft.trim() || isBusy}
             >
-              <AttachIcon />
+              {isSubmitting ? '처리 중...' : '제출'}
             </button>
           </div>
-          <button
-            className="chat-composer__submit"
-            type="submit"
-            disabled={!draft.trim()}
-          >
-            제출
-          </button>
-        </div>
 
-        <p className="chat-composer__count">
-          {draft.length.toLocaleString()} / 2000
-        </p>
-        <p className="chat-composer__tip">
-          <span aria-hidden="true">ⓘ</span>
-          정확하고 논리적인 답변이 좋은 인상을 줍니다. 모르는 내용은
-          솔직하게, 아는 범위 내에서 답변해보세요.
-        </p>
-      </form>
+          <p className="chat-composer__count">
+            {draft.length.toLocaleString()} / 2000
+          </p>
+          <p className="chat-composer__tip">
+            <span aria-hidden="true">ⓘ</span>
+            정확하고 논리적인 답변이 좋은 인상을 줍니다. 모르는 내용은
+            솔직하게, 아는 범위 내에서 답변해보세요.
+          </p>
+        </form>
+      )}
+
+      {isEndConfirmOpen && (
+        <div
+          className="chat-end-dialog"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !isEnding) {
+              setIsEndConfirmOpen(false)
+            }
+          }}
+        >
+          <section
+            className="chat-end-dialog__panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="chat-end-dialog-title"
+            aria-describedby="chat-end-dialog-description"
+          >
+            <p className="chat-end-dialog__eyebrow">END INTERVIEW</p>
+            <h2 id="chat-end-dialog-title">면접을 종료할까요?</h2>
+            <p id="chat-end-dialog-description">
+              종료하면 현재까지의 답변을 기준으로 최종 리포트를 생성합니다.
+            </p>
+            <div className="chat-end-dialog__actions">
+              <button
+                type="button"
+                disabled={isEnding}
+                onClick={() => setIsEndConfirmOpen(false)}
+              >
+                계속하기
+              </button>
+              <button
+                className="chat-end-dialog__confirm"
+                type="button"
+                disabled={isEnding}
+                onClick={handleConfirmEnd}
+              >
+                {isEnding ? '종료 중...' : '종료하기'}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   )
 }
