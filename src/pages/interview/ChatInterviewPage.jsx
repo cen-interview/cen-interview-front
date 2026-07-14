@@ -35,7 +35,30 @@ function ChatMessage({ turn }) {
             {formattedTime && (
               <time dateTime={turn.created_at}>{formattedTime}</time>
             )}
-            <span aria-label="전송 완료">✓</span>
+            <span aria-label={turn.pending ? '전송 중' : '전송 완료'}>
+              {turn.pending ? '…' : '✓'}
+            </span>
+          </div>
+        </div>
+      </section>
+    )
+  }
+
+  if (turn.pending) {
+    return (
+      <section
+        className="chat-message chat-message--follow-up"
+        aria-label="AI 면접관이 답변을 준비하고 있습니다."
+        aria-live="polite"
+      >
+        <InterviewerAvatar small />
+        <div className="chat-bubble chat-bubble--interviewer chat-bubble--compact chat-bubble--pending">
+          <p className="chat-bubble__label">AI 면접관</p>
+          <div className="chat-bubble__typing" aria-hidden="true">
+            <span>답변을 준비하고 있어요</span>
+            <i />
+            <i />
+            <i />
           </div>
         </div>
       </section>
@@ -113,8 +136,16 @@ function ChatInterviewPage() {
   const textareaRef = useRef(null)
   const accessToken = useAuthStore((state) => state.accessToken)
   const navigate = useNavigate()
-  const { session, phase, errorMessage, start, submitAnswer, end, retry } =
-    useChatInterview()
+  const {
+    session,
+    phase,
+    errorMessage,
+    pendingAnswer,
+    start,
+    submitAnswer,
+    end,
+    retry,
+  } = useChatInterview()
 
   useEffect(() => {
     if (!accessToken) {
@@ -127,7 +158,7 @@ function ChatInterviewPage() {
 
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ block: 'end' })
-  }, [session?.transcript?.length])
+  }, [session?.transcript?.length, pendingAnswer, phase])
 
   useEffect(() => {
     if (!session?.finished || !session.report || !session.session_id) {
@@ -196,11 +227,10 @@ function ChatInterviewPage() {
     const answer = draft.trim()
     if (!answer) return
 
+    setDraft('')
     const response = await submitAnswer(answer)
 
     if (response) {
-      setDraft('')
-
       if (!response.finished) {
         window.requestAnimationFrame(() => textareaRef.current?.focus())
       }
@@ -233,6 +263,22 @@ function ChatInterviewPage() {
   const isSubmitting = phase === 'submitting'
   const isEnding = phase === 'ending'
   const isBusy = isSubmitting || isEnding
+  const displayedTurns = pendingAnswer
+    ? [
+        ...transcript,
+        {
+          role: 'candidate',
+          text: pendingAnswer.text,
+          created_at: pendingAnswer.created_at,
+          pending: true,
+        },
+        {
+          role: 'interviewer',
+          pending: true,
+          clientEventId: pendingAnswer.clientEventId,
+        },
+      ]
+    : transcript
 
   return (
     <div className="chat-interview">
@@ -258,10 +304,10 @@ function ChatInterviewPage() {
       </AppHeader>
 
       <main className="chat-thread">
-        {transcript.map((turn, index) => (
+        {displayedTurns.map((turn, index) => (
           <ChatMessage
             turn={turn}
-            key={`${turn.role}-${turn.created_at}-${turn.question_id ?? index}`}
+            key={`${turn.role}-${turn.created_at ?? turn.clientEventId}-${turn.question_id ?? index}`}
           />
         ))}
         <div ref={threadEndRef} aria-hidden="true" />

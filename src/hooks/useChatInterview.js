@@ -47,6 +47,7 @@ export const useChatInterview = () => {
   const [phase, setPhase] = useState(INITIAL_PHASE)
   const [errorMessage, setErrorMessage] = useState(null)
   const [failedRequest, setFailedRequest] = useState(null)
+  const [pendingAnswer, setPendingAnswer] = useState(null)
   const requestInFlightRef = useRef(false)
 
   const applySessionResponse = useCallback((response) => {
@@ -100,6 +101,19 @@ export const useChatInterview = () => {
       }
 
       requestInFlightRef.current = true
+      if (request.payload.action === 'submit') {
+        setPendingAnswer((currentPendingAnswer) => {
+          if (currentPendingAnswer?.clientEventId === request.clientEventId) {
+            return currentPendingAnswer
+          }
+
+          return {
+            clientEventId: request.clientEventId,
+            text: request.payload.text,
+            created_at: new Date().toISOString(),
+          }
+        })
+      }
       setPhase(request.payload.action === 'end' ? 'ending' : 'submitting')
       setErrorMessage(null)
 
@@ -113,6 +127,10 @@ export const useChatInterview = () => {
 
         if (isSuccessful) {
           setFailedRequest(null)
+
+          if (request.payload.action === 'submit') {
+            setPendingAnswer(null)
+          }
         } else {
           setFailedRequest(request)
         }
@@ -180,6 +198,7 @@ export const useChatInterview = () => {
     session,
     phase,
     errorMessage,
+    pendingAnswer,
     canRetry: failedRequest !== null,
     start,
     submitAnswer,

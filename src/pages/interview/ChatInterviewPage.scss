@@ -29,6 +29,20 @@ $page-background: #f6f9ff;
   }
 }
 
+@keyframes chat-typing-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+
+  30% {
+    opacity: 1;
+    transform: translateY(-4px);
+  }
+}
+
 .chat-interview {
   position: relative;
   display: flex;
@@ -371,6 +385,41 @@ $page-background: #f6f9ff;
     font-size: 15px;
     line-height: 1.55;
     white-space: pre-wrap;
+  }
+
+  &--pending {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  &__typing {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 15px;
+    color: $muted;
+    font-size: 15px;
+
+    span {
+      margin-right: 3px;
+    }
+
+    i {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: $bright-blue;
+      animation: chat-typing-dot 1.2s ease-in-out infinite;
+
+      &:nth-of-type(2) {
+        animation-delay: 150ms;
+      }
+
+      &:nth-of-type(3) {
+        animation-delay: 300ms;
+      }
+    }
   }
 }
 
@@ -722,7 +771,8 @@ $page-background: #f6f9ff;
 
 @media (prefers-reduced-motion: reduce) {
   .chat-message,
-  .chat-avatar__pixels {
+  .chat-avatar__pixels,
+  .chat-bubble__typing i {
     animation: none;
   }
 }
