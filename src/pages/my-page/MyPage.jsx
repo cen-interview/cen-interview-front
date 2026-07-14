@@ -1,34 +1,94 @@
-import { useState } from 'react'
-import {Link, useNavigate} from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import analysisMascotImage from '../../assets/images/analysis-mascot.png'
+import {
+  createGitHubAuthorizeUrl,
+  createGitHubSource,
+  deleteEvidenceSource,
+  getEvidenceIndexStatus,
+  getEvidenceSummary,
+  getGitHubConnectionStatus,
+  getGitHubSources,
+  startEvidenceIndex,
+} from '../../api/githubEvidence.js'
 import AppHeader from '../../components/common/AppHeader'
 import { ROUTES } from '../../constants/routes'
+import { useAuthStore } from '../../store/authStore.js'
 import './MyPage.scss'
-import {useAuthStore} from "../../store/authStore.js";
 
-const initialGithubProjects = [
-  {
-    id: 1,
-    name: 'cen-interview-server',
-    url: 'github.com/soyeon-dev/cen-interview-server',
-    status: 'complete',
-    statusLabel: '분석 완료',
-  },
-  {
-    id: 2,
-    name: 'daily-tech-note',
-    url: 'github.com/soyeon-dev/daily-tech-note',
-    status: 'analyzing',
-    statusLabel: '분석 중',
-  },
-  {
-    id: 3,
-    name: 'spring-lab',
-    url: 'github.com/soyeon-dev/spring-lab',
-    status: 'error',
-    statusLabel: '분석 오류',
-  },
-]
+const GITHUB_QUERY_KEYS = {
+  connection: ['github', 'connection'],
+  sources: ['evidence', 'github', 'sources'],
+  status: ['evidence', 'index', 'status'],
+  summary: ['evidence', 'summary'],
+}
+const EMPTY_GITHUB_SOURCES = []
+
+function isGitHubRepositoryUrl(value) {
+  try {
+    const url = new URL(value)
+    const segments = url.pathname
+      .replace(/\.git$/, '')
+      .split('/')
+      .filter(Boolean)
+
+    return (
+      ['github.com', 'www.github.com'].includes(url.hostname.toLowerCase()) &&
+      segments.length >= 2
+    )
+  } catch {
+    return false
+  }
+}
+
+function getRepositoryName(source) {
+  return (
+    (source.normalized_url || source.url)
+      .split('/')
+      .filter(Boolean)
+      .at(-1)
+      ?.replace(/\.git$/, '') || 'GitHub 프로젝트'
+  )
+}
+
+function getRequestErrorMessage(error, fallbackMessage) {
+  const detail = error.response?.data?.detail
+
+  if (typeof detail === 'string') return detail
+
+  const statusMessages = {
+    400: '분석할 GitHub 저장소를 먼저 등록해주세요.',
+    404: 'GitHub 연결 또는 저장소 정보를 다시 확인해주세요.',
+    409: '이미 분석이 진행 중입니다.',
+    422: '올바른 GitHub 저장소 URL을 입력해주세요.',
+    500: 'GitHub 연동을 위한 서버 설정을 확인해주세요.',
+    502: 'GitHub와 통신하지 못했습니다. 잠시 후 다시 시도해주세요.',
+  }
+
+  return statusMessages[error.response?.status] || fallbackMessage
+}
+
+function getIndexPresentation(status) {
+  const presentations = {
+    idle: { badge: 'analyzing', label: '분석 대기' },
+    running: { badge: 'analyzing', label: '분석 중' },
+    success: { badge: 'complete', label: '분석 완료' },
+    partial_failed: { badge: 'analyzing', label: '일부 오류' },
+    failed: { badge: 'error', label: '분석 오류' },
+  }
+
+  return presentations[status] || presentations.idle
+}
+
+function formatIndexedAt(value) {
+  if (!value) return '아직 분석하지 않았어요'
+
+  return new Intl.DateTimeFormat('ko-KR', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value))
+}
 
 const practiceRecords = [
   {
@@ -150,15 +210,186 @@ function MyPage() {
   )
   const [notionDraft, setNotionDraft] = useState('')
   const [githubDraft, setGithubDraft] = useState('')
-  const [githubProjects, setGithubProjects] = useState(initialGithubProjects)
+  const [githubNotice, setGithubNotice] = useState(null)
+  const [selectedSourceIds, setSelectedSourceIds] = useState([])
 
-  const logout = useAuthStore((state) => state.logout);
-  const navigate = useNavigate();
+  const accessToken = useAuthStore((state) => state.accessToken)
+  const logout = useAuthStore((state) => state.logout)
+  const location = useLocation()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+
+  const queryEnabled = Boolean(accessToken)
+  const githubStatusQuery = useQuery({
+    queryKey: GITHUB_QUERY_KEYS.connection,
+    queryFn: getGitHubConnectionStatus,
+    enabled: queryEnabled,
+  })
+  const githubSourcesQuery = useQuery({
+    queryKey: GITHUB_QUERY_KEYS.sources,
+    queryFn: getGitHubSources,
+    enabled: queryEnabled,
+  })
+  const evidenceSummaryQuery = useQuery({
+    queryKey: GITHUB_QUERY_KEYS.summary,
+    queryFn: getEvidenceSummary,
+    enabled: queryEnabled,
+  })
+  const evidenceStatusQuery = useQuery({
+    queryKey: GITHUB_QUERY_KEYS.status,
+    queryFn: getEvidenceIndexStatus,
+    enabled: queryEnabled,
+    refetchInterval: (query) =>
+      query.state.data?.status === 'running' ? 1500 : false,
+  })
+
+  const githubStatus = githubStatusQuery.data ?? { connected: false }
+  const githubSources = githubSourcesQuery.data ?? EMPTY_GITHUB_SOURCES
+  const evidenceSummary = evidenceSummaryQuery.data
+  const evidenceStatus = evidenceStatusQuery.data ?? { status: 'idle' }
+  const indexPresentation = getIndexPresentation(evidenceStatus.status)
+  const indexFailures = evidenceStatus.result?.failures ?? []
+  const canStartInterview = ['success', 'partial_failed'].includes(
+    evidenceStatus.status,
+  )
+  const topicCoverage = useMemo(
+    () =>
+      Object.entries(
+        evidenceSummary?.coverage_map?.topic_coverage ?? {},
+      ).sort(([, left], [, right]) => right.confidence - left.confidence),
+    [evidenceSummary],
+  )
+
+  useEffect(() => {
+    const sourceIds = githubSources.map((source) => source.id)
+
+    setSelectedSourceIds((currentIds) => {
+      const retainedIds = currentIds.filter((id) => sourceIds.includes(id))
+      const newlyAddedIds = sourceIds.filter(
+        (id) => !currentIds.includes(id),
+      )
+
+      return [...retainedIds, ...newlyAddedIds]
+    })
+  }, [githubSources])
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+
+    if (
+      params.get('oauth') === 'github' &&
+      params.get('oauth_result') === 'connected'
+    ) {
+      setGithubNotice({
+        type: 'success',
+        message: 'GitHub 연결이 완료되었습니다.',
+      })
+      queryClient.invalidateQueries({ queryKey: GITHUB_QUERY_KEYS.connection })
+      navigate(ROUTES.MY_PAGE, { replace: true })
+    }
+  }, [location.search, navigate, queryClient])
+
+  useEffect(() => {
+    if (!['success', 'partial_failed', 'failed'].includes(evidenceStatus.status)) {
+      return
+    }
+
+    queryClient.invalidateQueries({ queryKey: GITHUB_QUERY_KEYS.sources })
+    queryClient.invalidateQueries({ queryKey: GITHUB_QUERY_KEYS.summary })
+  }, [evidenceStatus.status, queryClient])
+
+  const connectGitHubMutation = useMutation({
+    mutationFn: createGitHubAuthorizeUrl,
+    onSuccess: ({ authorize_url: authorizeUrl }) => {
+      window.location.assign(authorizeUrl)
+    },
+    onError: (error) => {
+      setGithubNotice({
+        type: 'error',
+        message: getRequestErrorMessage(
+          error,
+          'GitHub 연결을 시작하지 못했습니다.',
+        ),
+      })
+    },
+  })
+
+  const createSourceMutation = useMutation({
+    mutationFn: createGitHubSource,
+    onSuccess: () => {
+      setGithubDraft('')
+      setGithubNotice({
+        type: 'success',
+        message: 'GitHub 저장소를 등록했습니다. 분석할 저장소를 선택해주세요.',
+      })
+      queryClient.invalidateQueries({ queryKey: GITHUB_QUERY_KEYS.sources })
+      queryClient.invalidateQueries({ queryKey: GITHUB_QUERY_KEYS.summary })
+    },
+    onError: (error) => {
+      setGithubNotice({
+        type: 'error',
+        message: getRequestErrorMessage(
+          error,
+          'GitHub 저장소를 등록하지 못했습니다.',
+        ),
+      })
+    },
+  })
+
+  const deleteSourceMutation = useMutation({
+    mutationFn: deleteEvidenceSource,
+    onSuccess: () => {
+      setGithubNotice({
+        type: 'success',
+        message: '저장소 링크를 삭제했습니다. 기존 분석 결과는 다시 분석할 때 정리됩니다.',
+      })
+      queryClient.invalidateQueries({ queryKey: GITHUB_QUERY_KEYS.sources })
+      queryClient.invalidateQueries({ queryKey: GITHUB_QUERY_KEYS.summary })
+    },
+    onError: (error) => {
+      setGithubNotice({
+        type: 'error',
+        message: getRequestErrorMessage(
+          error,
+          'GitHub 저장소를 삭제하지 못했습니다.',
+        ),
+      })
+    },
+  })
+
+  const startIndexMutation = useMutation({
+    mutationFn: startEvidenceIndex,
+    onSuccess: (status) => {
+      queryClient.setQueryData(GITHUB_QUERY_KEYS.status, status)
+      setGithubNotice({
+        type: 'success',
+        message: '선택한 GitHub 저장소 분석을 시작했습니다.',
+      })
+    },
+    onError: (error) => {
+      if (error.response?.status === 409) {
+        evidenceStatusQuery.refetch()
+      }
+
+      setGithubNotice({
+        type: 'error',
+        message: getRequestErrorMessage(
+          error,
+          'GitHub 저장소 분석을 시작하지 못했습니다.',
+        ),
+      })
+    },
+  })
+  const canStartIndex =
+    githubStatus.connected &&
+    selectedSourceIds.length > 0 &&
+    evidenceStatus.status !== 'running' &&
+    !startIndexMutation.isPending
 
   const handleLogout = () => {
-    logout();
-    navigate("/");
-  };
+    logout()
+    navigate('/')
+  }
 
   const handleNotionSubmit = (event) => {
     event.preventDefault()
@@ -174,26 +405,37 @@ function MyPage() {
     event.preventDefault()
     const nextUrl = githubDraft.trim()
 
-    if (!nextUrl) return
+    if (!isGitHubRepositoryUrl(nextUrl)) {
+      setGithubNotice({
+        type: 'error',
+        message: 'https://github.com/{소유자}/{저장소} 형식으로 입력해주세요.',
+      })
+      return
+    }
 
-    const projectName =
-      nextUrl
-        .split('/')
-        .filter(Boolean)
-        .at(-1)
-        ?.replace(/\.git$/, '') || '새 프로젝트'
+    setGithubNotice(null)
+    createSourceMutation.mutate(nextUrl)
+  }
 
-    setGithubProjects((projects) => [
-      ...projects,
-      {
-        id: Date.now(),
-        name: projectName,
-        url: nextUrl.replace(/^https?:\/\//, ''),
-        status: 'analyzing',
-        statusLabel: '분석 중',
-      },
-    ])
-    setGithubDraft('')
+  const handleSourceSelection = (sourceId) => {
+    setSelectedSourceIds((currentIds) =>
+      currentIds.includes(sourceId)
+        ? currentIds.filter((id) => id !== sourceId)
+        : [...currentIds, sourceId],
+    )
+  }
+
+  const handleStartIndex = () => {
+    if (selectedSourceIds.length === 0) {
+      setGithubNotice({
+        type: 'error',
+        message: '분석할 GitHub 저장소를 하나 이상 선택해주세요.',
+      })
+      return
+    }
+
+    setGithubNotice(null)
+    startIndexMutation.mutate(selectedSourceIds)
   }
 
   return (
@@ -223,7 +465,7 @@ function MyPage() {
           </div>
           <p className="my-page__updated">
             <LineIcon name="refresh" />
-            최근 분석 업데이트 · 오늘 오후 2:30
+            최근 분석 업데이트 · {formatIndexedAt(evidenceSummary?.last_indexed_at)}
           </p>
         </section>
 
@@ -342,10 +584,58 @@ function MyPage() {
                       <p>여러 프로젝트를 등록해 코드 경험을 연결해요.</p>
                     </div>
                   </div>
-                  <span className="source-card__count">
-                    {githubProjects.length}개 등록
-                  </span>
+                  <div className="source-card__header-actions">
+                    {githubStatus.connected && (
+                      <StatusBadge status="complete">연결됨</StatusBadge>
+                    )}
+                    <span className="source-card__count">
+                      {githubSources.length}개 등록
+                    </span>
+                  </div>
                 </header>
+
+                <div
+                  className={`github-connection${
+                    githubStatus.connected ? ' github-connection--connected' : ''
+                  }`}
+                >
+                  <div>
+                    <strong>
+                      {githubStatusQuery.isFetching
+                        ? 'GitHub 연결 상태 확인 중'
+                        : !accessToken
+                          ? '로그인 후 GitHub를 연결할 수 있어요'
+                        : githubStatus.connected
+                          ? `@${githubStatus.account_name || 'GitHub 사용자'}`
+                          : 'GitHub 계정을 먼저 연결해주세요'}
+                    </strong>
+                    <small>
+                      {githubStatus.connected
+                        ? '등록한 저장소를 읽어 면접 근거를 만들 수 있어요.'
+                        : '연결 후 공개 및 권한이 허용된 저장소를 분석할 수 있어요.'}
+                    </small>
+                  </div>
+                  {!githubStatus.connected && !githubStatusQuery.isFetching && (
+                    <button
+                      type="button"
+                      disabled={connectGitHubMutation.isPending || !accessToken}
+                      onClick={() => connectGitHubMutation.mutate()}
+                    >
+                      {connectGitHubMutation.isPending
+                        ? '연결 준비 중...'
+                        : 'GitHub 연결'}
+                    </button>
+                  )}
+                </div>
+
+                {githubNotice && (
+                  <p
+                    className={`github-notice github-notice--${githubNotice.type}`}
+                    role={githubNotice.type === 'error' ? 'alert' : 'status'}
+                  >
+                    {githubNotice.message}
+                  </p>
+                )}
 
                 <form className="source-form" onSubmit={handleGithubSubmit}>
                   <label htmlFor="github-url">새 프로젝트 링크</label>
@@ -357,34 +647,87 @@ function MyPage() {
                       placeholder="https://github.com/username/project"
                       type="url"
                       value={githubDraft}
+                      disabled={
+                        !githubStatus.connected || createSourceMutation.isPending
+                      }
                     />
-                    <button type="submit">
+                    <button
+                      type="submit"
+                      disabled={
+                        !githubStatus.connected || createSourceMutation.isPending
+                      }
+                    >
                       <LineIcon name="plus" />
-                      추가
+                      {createSourceMutation.isPending ? '등록 중' : '추가'}
                     </button>
                   </div>
+                  <p>
+                    {githubStatus.connected
+                      ? 'GitHub 저장소 주소를 입력한 뒤 분석할 프로젝트를 선택하세요.'
+                      : '저장소를 등록하려면 먼저 GitHub 계정을 연결해주세요.'}
+                  </p>
                 </form>
 
                 <div className="github-list">
                   <div className="github-list__label">
                     <span>등록된 프로젝트</span>
-                    <small>프로젝트는 여러 개 추가할 수 있어요.</small>
+                    <small>{selectedSourceIds.length}개 선택</small>
                   </div>
-                  {githubProjects.map((project) => (
-                    <div className="github-project" key={project.id}>
+                  {githubSourcesQuery.isFetching && !githubSourcesQuery.data && (
+                    <p className="github-list__empty">저장소 목록을 불러오고 있어요.</p>
+                  )}
+                  {!githubSourcesQuery.isFetching && githubSources.length === 0 && (
+                    <p className="github-list__empty">
+                      아직 등록한 GitHub 저장소가 없습니다.
+                    </p>
+                  )}
+                  {githubSources.map((source) => (
+                    <div className="github-project" key={source.id}>
+                      <label className="github-project__select">
+                        <input
+                          type="checkbox"
+                          aria-label={`${getRepositoryName(source)} 선택`}
+                          checked={selectedSourceIds.includes(source.id)}
+                          disabled={evidenceStatus.status === 'running'}
+                          onChange={() => handleSourceSelection(source.id)}
+                        />
+                      </label>
                       <span className="github-project__icon" aria-hidden="true">
                         <LineIcon name="code" />
                       </span>
                       <span className="github-project__info">
-                        <strong>{project.name}</strong>
-                        <small>{project.url}</small>
+                        <strong>{getRepositoryName(source)}</strong>
+                        <small>{source.normalized_url || source.url}</small>
                       </span>
-                      <StatusBadge status={project.status}>
-                        {project.statusLabel}
+                      <StatusBadge status={indexPresentation.badge}>
+                        {indexPresentation.label}
                       </StatusBadge>
+                      <button
+                        className="github-project__delete"
+                        type="button"
+                        disabled={
+                          evidenceStatus.status === 'running' ||
+                          deleteSourceMutation.isPending
+                        }
+                        onClick={() => deleteSourceMutation.mutate(source.id)}
+                      >
+                        삭제
+                      </button>
                     </div>
                   ))}
                 </div>
+
+                <button
+                  className="github-index-button"
+                  type="button"
+                  disabled={!canStartIndex}
+                  onClick={handleStartIndex}
+                >
+                  <LineIcon name="refresh" />
+                  {evidenceStatus.status === 'running'
+                    ? 'GitHub 프로젝트 분석 중...'
+                    : '선택한 프로젝트 분석'}
+                </button>
               </article>
             </div>
 
@@ -395,9 +738,9 @@ function MyPage() {
                     <LineIcon name="spark" />
                     AI 자료 분석
                   </p>
-                  <h3>연결한 자료를 함께 읽고 있어요</h3>
+                  <h3>GitHub 프로젝트를 읽고 있어요</h3>
                   <span>
-                    학습 내용과 프로젝트 경험을 바탕으로
+                    구현 경험과 코드 구조를 근거로
                     <br />
                     나에게 맞는 기술면접 질문을 만들어요.
                   </span>
@@ -410,17 +753,17 @@ function MyPage() {
 
               <div className="analysis-card__flow" aria-label="자료 분석 과정">
                 <div>
-                  <span className="analysis-card__flow-icon analysis-card__flow-icon--notion">
-                    N
-                  </span>
-                  <small>학습 기록</small>
-                </div>
-                <span className="analysis-card__plus">+</span>
-                <div>
                   <span className="analysis-card__flow-icon">
                     <LineIcon name="code" />
                   </span>
-                  <small>프로젝트 코드</small>
+                  <small>GitHub</small>
+                </div>
+                <span className="analysis-card__arrow">→</span>
+                <div>
+                  <span className="analysis-card__flow-icon analysis-card__flow-icon--result">
+                    <LineIcon name="spark" />
+                  </span>
+                  <small>Evidence</small>
                 </div>
                 <span className="analysis-card__arrow">→</span>
                 <div>
@@ -437,8 +780,8 @@ function MyPage() {
                     <LineIcon name="check" />
                   </span>
                   <span>
-                    <small>분석 완료</small>
-                    <strong>3개</strong>
+                    <small>등록 저장소</small>
+                    <strong>{evidenceSummary?.source_counts?.github ?? githubSources.length}개</strong>
                   </span>
                 </div>
                 <div>
@@ -446,8 +789,8 @@ function MyPage() {
                     <LineIcon name="refresh" />
                   </span>
                   <span>
-                    <small>분석 중</small>
-                    <strong>1개</strong>
+                    <small>Evidence</small>
+                    <strong>{evidenceSummary?.chunk_count ?? 0}개</strong>
                   </span>
                 </div>
                 <div>
@@ -456,27 +799,47 @@ function MyPage() {
                   </span>
                   <span>
                     <small>분석 오류</small>
-                    <strong>1개</strong>
+                    <strong>{indexFailures.length}개</strong>
                   </span>
                 </div>
               </div>
 
               <div className="analysis-card__insight">
-                <p>GitHub에서는 이런 내용을 찾고 있어요</p>
+                <p>
+                  {topicCoverage.length > 0
+                    ? 'GitHub에서 발견한 주요 기술 주제'
+                    : 'GitHub에서는 이런 내용을 찾고 있어요'}
+                </p>
                 <div>
-                  <span>기술 스택</span>
-                  <span>구현 기능</span>
-                  <span>코드 구조</span>
+                  {topicCoverage.length > 0 ? (
+                    topicCoverage.slice(0, 5).map(([topic, coverage]) => (
+                      <span key={topic}>
+                        {topic} {Math.round(coverage.confidence * 100)}%
+                      </span>
+                    ))
+                  ) : (
+                    <>
+                      <span>기술 스택</span>
+                      <span>구현 기능</span>
+                      <span>코드 구조</span>
+                    </>
+                  )}
                 </div>
               </div>
 
-              <Link
-                className="analysis-card__detail"
-                to={ROUTES.MY_PAGE_ANALYSIS}
-              >
-                분석한 자료 상세 확인
-                <LineIcon name="arrow" />
-              </Link>
+              {canStartInterview ? (
+                <Link
+                  className="analysis-card__detail"
+                  to={ROUTES.MODE_SELECT}
+                >
+                  분석 결과로 면접 시작
+                  <LineIcon name="arrow" />
+                </Link>
+              ) : (
+                <span className="analysis-card__detail analysis-card__detail--disabled">
+                  분석 완료 후 면접을 시작할 수 있어요
+                </span>
+              )}
             </aside>
           </div>
         </section>
