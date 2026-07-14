@@ -21,7 +21,7 @@ const formatMessageTime = (createdAt) => {
   }).format(date)
 }
 
-function ChatMessage({ turn, isOpeningMessage }) {
+function ChatMessage({ turn }) {
   const isInterviewer = turn.role === 'interviewer'
   const formattedTime = formatMessageTime(turn.created_at)
 
@@ -43,24 +43,11 @@ function ChatMessage({ turn, isOpeningMessage }) {
   }
 
   return (
-    <section
-      className={`chat-message ${
-        isOpeningMessage ? 'chat-message--question' : 'chat-message--follow-up'
-      }`}
-    >
-      <InterviewerAvatar small={!isOpeningMessage} />
-      <div
-        className={`chat-bubble chat-bubble--interviewer${
-          isOpeningMessage ? '' : ' chat-bubble--compact'
-        }`}
-      >
-        <span className="chat-bubble__tail" aria-hidden="true" />
+    <section className="chat-message chat-message--follow-up">
+      <InterviewerAvatar small />
+      <div className="chat-bubble chat-bubble--interviewer chat-bubble--compact">
         <p className="chat-bubble__label">AI 면접관</p>
-        {isOpeningMessage ? (
-          <h1>{turn.text}</h1>
-        ) : (
-          <p className="chat-bubble__feedback">{turn.text}</p>
-        )}
+        <p className="chat-bubble__feedback">{turn.text}</p>
         {formattedTime && (
           <time dateTime={turn.created_at}>{formattedTime}</time>
         )}
@@ -274,7 +261,6 @@ function ChatInterviewPage() {
         {transcript.map((turn, index) => (
           <ChatMessage
             turn={turn}
-            isOpeningMessage={index === 0 && turn.role === 'interviewer'}
             key={`${turn.role}-${turn.created_at}-${turn.question_id ?? index}`}
           />
         ))}
