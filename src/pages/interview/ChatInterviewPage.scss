@@ -29,6 +29,20 @@ $page-background: #f6f9ff;
   }
 }
 
+@keyframes chat-typing-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+
+  30% {
+    opacity: 1;
+    transform: translateY(-4px);
+  }
+}
+
 .chat-interview {
   position: relative;
   display: flex;
@@ -193,10 +207,6 @@ $page-background: #f6f9ff;
   align-items: center;
   animation: chat-message-in 450ms ease both;
 
-  &--question {
-    gap: 18px;
-  }
-
   &--answer {
     justify-content: flex-end;
     padding-left: 280px;
@@ -293,6 +303,7 @@ $page-background: #f6f9ff;
   &--small {
     width: 175px;
     height: 135px;
+    place-items: center start;
 
     img {
       width: 130px;
@@ -317,39 +328,12 @@ $page-background: #f6f9ff;
     font-weight: 800;
   }
 
-  &__tail {
-    position: absolute;
-    top: 50%;
-    left: -17px;
-    width: 32px;
-    height: 28px;
-    border-bottom: 1px solid #c9ddfa;
-    background: white;
-    clip-path: polygon(0 50%, 100% 0, 100% 100%);
-    transform: translateY(-50%);
-
-    &::after {
-      position: absolute;
-      inset: 1px -2px 0 2px;
-      background: #fff;
-      clip-path: inherit;
-      content: '';
-    }
-  }
-
   &--interviewer {
     width: calc(100% - 238px);
     min-height: 165px;
     padding: 27px 38px 23px;
     border-radius: 22px;
     background: rgba(white, 0.9);
-
-    h1 {
-      margin: 19px 0 19px;
-      font-size: clamp(20px, 1.55vw, 26px);
-      font-weight: 800;
-      letter-spacing: -0.5px;
-    }
 
     time {
       color: #8497b8;
@@ -358,8 +342,7 @@ $page-background: #f6f9ff;
   }
 
   &--mine {
-    width: min(1020px, 100%);
-    min-height: 220px;
+    width: min(800px, 100%);
     padding: 27px 32px 23px;
     border-radius: 22px;
     background: linear-gradient(
@@ -367,15 +350,11 @@ $page-background: #f6f9ff;
       rgba(#eef6ff, 0.92),
       rgba(#e7f1ff, 0.72)
     );
-
-    .chat-bubble__label {
-      text-align: right;
-    }
   }
 
   &__answer {
     margin: 17px 0 14px;
-    font-size: clamp(15px, 1.07vw, 18px);
+    font-size: 15px;
     line-height: 1.6;
     white-space: pre-line;
   }
@@ -383,7 +362,7 @@ $page-background: #f6f9ff;
   &__sent {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: flex-start;
     gap: 10px;
     color: #8497b8;
     font-size: 13px;
@@ -396,7 +375,7 @@ $page-background: #f6f9ff;
   }
 
   &--compact {
-    width: min(650px, calc(100% - 190px));
+    width: min(800px, calc(100% - 190px));
     min-height: 135px;
     padding: 21px 28px 18px;
   }
@@ -406,6 +385,41 @@ $page-background: #f6f9ff;
     font-size: 15px;
     line-height: 1.55;
     white-space: pre-wrap;
+  }
+
+  &--pending {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  &__typing {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 15px;
+    color: $muted;
+    font-size: 15px;
+
+    span {
+      margin-right: 3px;
+    }
+
+    i {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: $bright-blue;
+      animation: chat-typing-dot 1.2s ease-in-out infinite;
+
+      &:nth-of-type(2) {
+        animation-delay: 150ms;
+      }
+
+      &:nth-of-type(3) {
+        animation-delay: 300ms;
+      }
+    }
   }
 }
 
@@ -626,7 +640,7 @@ $page-background: #f6f9ff;
     }
 
     &--compact {
-      width: min(650px, calc(100% - 160px));
+      width: min(800px, calc(100% - 160px));
     }
   }
 
@@ -676,7 +690,6 @@ $page-background: #f6f9ff;
   .chat-message {
     align-items: flex-start;
 
-    &--question,
     &--follow-up {
       gap: 6px;
     }
@@ -703,22 +716,12 @@ $page-background: #f6f9ff;
   }
 
   .chat-bubble {
-    &__tail {
-      top: 35px;
-    }
-
     &--interviewer,
     &--compact {
       width: calc(100% - 68px);
       min-height: 0;
       padding: 20px;
       border-radius: 18px;
-    }
-
-    &--interviewer h1 {
-      margin-block: 14px;
-      font-size: 17px;
-      line-height: 1.5;
     }
 
     &--mine {
@@ -768,7 +771,8 @@ $page-background: #f6f9ff;
 
 @media (prefers-reduced-motion: reduce) {
   .chat-message,
-  .chat-avatar__pixels {
+  .chat-avatar__pixels,
+  .chat-bubble__typing i {
     animation: none;
   }
 }
