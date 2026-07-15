@@ -152,6 +152,7 @@ export const useVoiceInterview = () => {
           action: 'submit',
           text: answer,
           submission_type: 'manual',
+          completion_reason: 'manual_button',
         },
         clientEventId: crypto.randomUUID(),
       })
@@ -177,6 +178,7 @@ export const useVoiceInterview = () => {
     errorMessage,
     canRetry: failedRequest !== null,
     start,
+    applySessionResponse,
     submitAnswer,
     retry,
   }

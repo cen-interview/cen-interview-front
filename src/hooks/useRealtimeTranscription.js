@@ -47,6 +47,7 @@ function useRealtimeTranscription({
   const startVolumeMonitoringRef = useRef(() => {})
   const stopVolumeMonitoringRef = useRef(() => {})
   const resetTranscriptRef = useRef(() => setTranscript(''))
+  const replaceTranscriptRef = useRef(() => {})
   const finalizeTranscriptRef = useRef(async () => '')
 
   useEffect(() => {
@@ -108,6 +109,11 @@ function useRealtimeTranscription({
   // 새 답변을 받을 때 화면 문장과 내부 발화 조각을 함께 초기화한다.
   const resetTranscript = useCallback(() => {
     resetTranscriptRef.current()
+  }, [])
+
+  // 확인 응답 수집 후 기존 기본 답변을 화면과 누적 기준에 다시 복원한다.
+  const replaceTranscript = useCallback((text) => {
+    replaceTranscriptRef.current(text)
   }, [])
 
   // 마이크를 닫고 아직 처리 중인 오디오 구간의 최종 전사를 기다린다.
@@ -181,6 +187,27 @@ function useRealtimeTranscription({
       segmentOrder = 0
       transcriptValue = ''
       setTranscript('')
+      setTranscriptSnapshot(null)
+      setActivitySnapshot(null)
+    }
+
+    replaceTranscriptRef.current = (text) => {
+      const normalizedText = text?.trim() ?? ''
+
+      updateSpeechActivity(false)
+      segments.clear()
+      segmentOrder = 0
+      transcriptValue = normalizedText
+
+      if (normalizedText) {
+        segments.set('__restored_answer__', {
+          order: segmentOrder,
+          text: normalizedText,
+        })
+        segmentOrder += 1
+      }
+
+      setTranscript(normalizedText)
       setTranscriptSnapshot(null)
       setActivitySnapshot(null)
     }
@@ -412,6 +439,7 @@ function useRealtimeTranscription({
       dataChannelRef.current = null
       startVolumeMonitoringRef.current = () => {}
       stopVolumeMonitoringRef.current = () => {}
+      replaceTranscriptRef.current = () => {}
       finalizeTranscriptRef.current = async () => ''
     }
 
@@ -588,6 +616,7 @@ function useRealtimeTranscription({
     return () => {
       disposed = true
       resetTranscriptRef.current = () => setTranscript('')
+      replaceTranscriptRef.current = () => {}
       finalizeTranscriptRef.current = async () => ''
       cleanupVoiceResources()
     }
@@ -605,6 +634,7 @@ function useRealtimeTranscription({
     resumeListening,
     clearAudioBuffer,
     resetTranscript,
+    replaceTranscript,
     finalizeTranscript,
   }
 }

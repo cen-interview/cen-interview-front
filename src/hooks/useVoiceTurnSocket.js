@@ -48,7 +48,8 @@ const getServerErrorMessage = (message) => {
  *   readyState: { sessionId: string, questionId: string, revision: number, serverState: string } | null,
  *   lastMessage: object | null,
  *   sendMessage: (message: object) => boolean,
- *   reconnect: () => void,
+ *   subscribe: (listener: (message: object) => void) => () => void,
+ *   reconnect: (nextQuestionId?: string) => void,
  *   disconnect: () => void
  * }} WebSocket 연결 상태와 제어 함수
  */
@@ -66,6 +67,13 @@ function useVoiceTurnSocket({
   const socketRef = useRef(null)
   const connectionGenerationRef = useRef(0)
   const statusRef = useRef('idle')
+  const questionIdRef = useRef(questionId)
+  const reconnectQuestionIdRef = useRef(null)
+  const messageListenersRef = useRef(new Set())
+
+  useEffect(() => {
+    questionIdRef.current = questionId
+  }, [questionId])
 
   const updateStatus = useCallback((nextStatus) => {
     statusRef.current = nextStatus
@@ -85,10 +93,19 @@ function useVoiceTurnSocket({
     updateStatus('disconnected')
   }, [updateStatus])
 
-  const reconnect = useCallback(() => {
+  const reconnect = useCallback((nextQuestionId) => {
+    reconnectQuestionIdRef.current = nextQuestionId?.trim() || null
     setErrorMessage('')
     setReadyState(null)
     setConnectionAttempt((currentAttempt) => currentAttempt + 1)
+  }, [])
+
+  const subscribe = useCallback((listener) => {
+    messageListenersRef.current.add(listener)
+
+    return () => {
+      messageListenersRef.current.delete(listener)
+    }
   }, [])
 
   const sendMessage = useCallback((message) => {
@@ -103,7 +120,11 @@ function useVoiceTurnSocket({
   }, [])
 
   useEffect(() => {
-    if (!enabled || !sessionId || !questionId || !accessToken) {
+    const expectedQuestionId =
+      reconnectQuestionIdRef.current || questionIdRef.current
+    reconnectQuestionIdRef.current = null
+
+    if (!enabled || !sessionId || !expectedQuestionId || !accessToken) {
       connectionGenerationRef.current += 1
       const currentSocket = socketRef.current
       socketRef.current = null
@@ -198,39 +219,73 @@ function useVoiceTurnSocket({
       setLastMessage(message)
 
       if (message.type === 'error') {
-        failConnection(getServerErrorMessage(message))
+        messageListenersRef.current.forEach((listener) => {
+          try {
+            listener(message)
+          } catch {
+            // 한 구독자의 오류가 다른 메시지 처리와 socket을 막지 않게 한다.
+          }
+        })
 
-        if (!message.recoverable) {
-          socket.close(1000, 'fatal server error')
+        if (message.recoverable) {
+          return
         }
+
+        failConnection(getServerErrorMessage(message))
+        socket.close(1000, 'fatal server error')
         return
       }
 
-      if (message.type !== 'connection.ready') {
-        return
+      if (message.type === 'connection.ready') {
+        const connectionMatches =
+          message.session_id === sessionId &&
+          message.question_id === expectedQuestionId
+        const validRevision =
+          Number.isInteger(message.revision) && message.revision >= 0
+        const validServerState = SERVER_STATES.has(message.state)
+
+        if (!connectionMatches || !validRevision || !validServerState) {
+          failConnection('현재 질문과 일치하지 않는 음성 연결 응답을 받았습니다.')
+          socket.close(1000, 'connection ready mismatch')
+          return
+        }
+
+        window.clearTimeout(authenticationTimeoutId)
+        setReadyState({
+          sessionId: message.session_id,
+          questionId: message.question_id,
+          revision: message.revision,
+          serverState: message.state,
+        })
+        setErrorMessage('')
+        updateStatus('ready')
       }
 
-      const connectionMatches =
-        message.session_id === sessionId && message.question_id === questionId
-      const validRevision =
-        Number.isInteger(message.revision) && message.revision >= 0
-      const validServerState = SERVER_STATES.has(message.state)
+      if (message.type === 'answer.committed') {
+        const committedSession = message.session
+        const nextQuestionId = committedSession?.question?.question_id
 
-      if (!connectionMatches || !validRevision || !validServerState) {
-        failConnection('현재 질문과 일치하지 않는 음성 연결 응답을 받았습니다.')
-        socket.close(1000, 'connection ready mismatch')
-        return
+        if (
+          committedSession?.session_id === sessionId &&
+          !committedSession.finished &&
+          nextQuestionId
+        ) {
+          setReadyState({
+            sessionId,
+            questionId: nextQuestionId,
+            revision: 0,
+            serverState: 'listening',
+          })
+        }
       }
 
-      window.clearTimeout(authenticationTimeoutId)
-      setReadyState({
-        sessionId: message.session_id,
-        questionId: message.question_id,
-        revision: message.revision,
-        serverState: message.state,
+      messageListenersRef.current.forEach((listener) => {
+        try {
+          listener(message)
+        } catch {
+          // 한 구독자의 오류가 다른 메시지 처리와 socket을 막지 않게 한다.
+        }
       })
-      setErrorMessage('')
-      updateStatus('ready')
     }
 
     const handleError = () => {
@@ -277,7 +332,6 @@ function useVoiceTurnSocket({
     accessToken,
     connectionAttempt,
     enabled,
-    questionId,
     sessionId,
     updateStatus,
   ])
@@ -288,6 +342,7 @@ function useVoiceTurnSocket({
     readyState,
     lastMessage,
     sendMessage,
+    subscribe,
     reconnect,
     disconnect,
   }
