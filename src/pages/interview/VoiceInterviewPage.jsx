@@ -312,7 +312,12 @@ function VoiceInterviewSession({ accessToken }) {
         return
       }
 
-      const response = await submitAnswer(finalTranscript)
+      const deliverySnapshot =
+        voiceTurnController.createDeliverySnapshot(finalTranscript)
+      const response = await submitAnswer(
+        finalTranscript,
+        deliverySnapshot.metrics,
+      )
 
       if (response) {
         voiceTurnController.completeManualSubmission(response)

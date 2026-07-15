@@ -139,7 +139,7 @@ export const useVoiceInterview = () => {
   )
 
   const submitAnswer = useCallback(
-    async (text) => {
+    async (text, metrics) => {
       const answer = text.trim()
 
       if (!answer || session?.finished) {
@@ -153,6 +153,7 @@ export const useVoiceInterview = () => {
           text: answer,
           submission_type: 'manual',
           completion_reason: 'manual_button',
+          ...(metrics && { metrics }),
         },
         clientEventId: crypto.randomUUID(),
       })

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createVoiceDeliveryMetricsTracker } from '../features/interview/voiceDeliveryMetrics.js'
 
 const TRANSCRIPT_THROTTLE_MS = 500
 const INITIAL_SILENCE_TIMEOUT_MS = 8000
@@ -69,6 +70,11 @@ function useVoiceTurnController({
   const disconnectedSnapshotDirtyRef = useRef(false)
   const hasSpokenRef = useRef(false)
   const initialSilenceTimerRef = useRef()
+  const deliveryMetricsTrackerRef = useRef()
+
+  if (!deliveryMetricsTrackerRef.current) {
+    deliveryMetricsTrackerRef.current = createVoiceDeliveryMetricsTracker()
+  }
 
   const updatePhase = useCallback((nextPhase) => {
     phaseRef.current = nextPhase
@@ -151,10 +157,12 @@ function useVoiceTurnController({
     }
 
     answerTextRef.current = text
+    const delivery = deliveryMetricsTrackerRef.current.createSnapshot(text)
     lastSentSnapshotRef.current = {
       text,
       segmentFinal: Boolean(snapshot.segmentFinal),
       speechActive: speechActiveRef.current,
+      delivery,
     }
     setAnswerText(text)
   }, [])
@@ -183,6 +191,7 @@ function useVoiceTurnController({
     syncBlockedRef.current = false
     disconnectedSnapshotDirtyRef.current = false
     hasSpokenRef.current = false
+    deliveryMetricsTrackerRef.current.reset(questionId)
     clearInitialSilenceTimer()
     setRevision(initialRevision)
     setAnswerText('')
@@ -213,6 +222,7 @@ function useVoiceTurnController({
     if (phaseRef.current !== 'reconnecting') {
       phaseBeforeReconnectRef.current = phaseRef.current
     }
+    deliveryMetricsTrackerRef.current.suspend()
     pauseListening()
 
     const activeConfirmation = confirmationRef.current
@@ -229,6 +239,9 @@ function useVoiceTurnController({
         text: activeConfirmation.baseAnswer,
         segmentFinal: false,
         speechActive: false,
+        delivery: deliveryMetricsTrackerRef.current.createSnapshot(
+          activeConfirmation.baseAnswer,
+        ),
       }
       setRevision(activeConfirmation.baseRevision)
       setAnswerText(activeConfirmation.baseAnswer)
@@ -299,6 +312,7 @@ function useVoiceTurnController({
       }
 
       const nextRevision = revisionRef.current + 1
+      const delivery = deliveryMetricsTrackerRef.current.createSnapshot(text)
       const sent = sendMessage({
         type: 'answer.transcript.updated',
         question_id: questionIdRef.current,
@@ -306,6 +320,10 @@ function useVoiceTurnController({
         text,
         speech_active: speechActiveRef.current,
         segment_final: snapshot.segmentFinal,
+        ...(delivery.answerDurationSeconds !== undefined && {
+          answer_duration_seconds: delivery.answerDurationSeconds,
+        }),
+        ...(delivery.metrics && { metrics: delivery.metrics }),
       })
 
       if (!sent) {
@@ -321,6 +339,7 @@ function useVoiceTurnController({
         text,
         segmentFinal: snapshot.segmentFinal,
         speechActive: speechActiveRef.current,
+        delivery,
       }
       setRevision(nextRevision)
       setAnswerText(text)
@@ -447,7 +466,11 @@ function useVoiceTurnController({
   )
 
   const handleSpeechActivityChange = useCallback(
-    ({ speechActive: nextSpeechActive }) => {
+    ({ speechActive: nextSpeechActive, changedAt }) => {
+      const activityChangedAt = Number.isFinite(changedAt)
+        ? changedAt
+        : Date.now()
+
       if (nextSpeechActive) {
         markFirstSpeech()
       }
@@ -469,13 +492,19 @@ function useVoiceTurnController({
         )
         stopConfirmation()
         modeRef.current = 'answer'
+        deliveryMetricsTrackerRef.current.startSpeaking(activityChangedAt)
         confirmationRef.current = null
         answerTextRef.current = activeConfirmation.baseAnswer
         speechActiveRef.current = true
+        const delivery = deliveryMetricsTrackerRef.current.createSnapshot(
+          activeConfirmation.baseAnswer,
+          activityChangedAt,
+        )
         lastSentSnapshotRef.current = {
           text: activeConfirmation.baseAnswer,
           segmentFinal: false,
           speechActive: true,
+          delivery,
         }
         setAnswerText(activeConfirmation.baseAnswer)
         setConfirmation(null)
@@ -492,6 +521,16 @@ function useVoiceTurnController({
         setSpeechActive(true)
         updatePhase('barge_in')
         return
+      }
+
+      if (modeRef.current === 'answer') {
+        if (nextSpeechActive) {
+          deliveryMetricsTrackerRef.current.startSpeaking(activityChangedAt)
+        } else if (manualSubmissionRef.current) {
+          deliveryMetricsTrackerRef.current.suspend(activityChangedAt)
+        } else {
+          deliveryMetricsTrackerRef.current.stopSpeaking(activityChangedAt)
+        }
       }
 
       if (
@@ -557,6 +596,7 @@ function useVoiceTurnController({
       setSpeechActive(false)
       setConfirmation(null)
       replaceTranscript(nextAnswer)
+      deliveryMetricsTrackerRef.current.resume()
       resumeListening()
       updatePhase('listening')
     },
@@ -582,6 +622,7 @@ function useVoiceTurnController({
 
       clearInitialSilenceTimer()
       clearPendingTranscript()
+      deliveryMetricsTrackerRef.current.suspend()
       const nextConfirmation = {
         confirmationId: message.confirmation_id,
         baseRevision: message.revision,
@@ -653,6 +694,7 @@ function useVoiceTurnController({
           setErrorMessage(
             '서버에 더 최신 답변이 있어 자동 동기화를 중단했습니다. 현재 답변을 수동으로 제출해 주세요.',
           )
+          deliveryMetricsTrackerRef.current.resume()
           resumeListening()
           updatePhase('sync_error')
           return
@@ -660,6 +702,9 @@ function useVoiceTurnController({
 
         if (answerTextRef.current) {
           const latestSnapshot = lastSentSnapshotRef.current
+          const delivery = deliveryMetricsTrackerRef.current.createSnapshot(
+            answerTextRef.current,
+          )
           const synchronized = sendMessage({
             type: 'answer.transcript.updated',
             question_id: questionIdRef.current,
@@ -667,11 +712,16 @@ function useVoiceTurnController({
             text: answerTextRef.current,
             speech_active: false,
             segment_final: latestSnapshot?.segmentFinal ?? false,
+            ...(delivery.answerDurationSeconds !== undefined && {
+              answer_duration_seconds: delivery.answerDurationSeconds,
+            }),
+            ...(delivery.metrics && { metrics: delivery.metrics }),
           })
 
           if (!synchronized) {
             setErrorMessage('보존한 답변을 다시 연결하지 못했습니다.')
             syncBlockedRef.current = true
+            deliveryMetricsTrackerRef.current.resume()
             resumeListening()
             updatePhase('sync_error')
             return
@@ -691,6 +741,7 @@ function useVoiceTurnController({
             phaseBeforeReconnectRef.current,
           )
         ) {
+          deliveryMetricsTrackerRef.current.resume()
           resumeListening()
           updatePhase('listening')
 
@@ -715,6 +766,7 @@ function useVoiceTurnController({
             phaseBeforeReconnectRef.current = phaseRef.current
           }
           clearInitialSilenceTimer()
+          deliveryMetricsTrackerRef.current.suspend()
           pauseListening()
           updatePhase('reconnecting')
           return
@@ -738,6 +790,7 @@ function useVoiceTurnController({
 
         if (!message.recoverable) {
           clearInitialSilenceTimer()
+          deliveryMetricsTrackerRef.current.suspend()
           pauseListening()
         }
         return
@@ -785,6 +838,7 @@ function useVoiceTurnController({
       if (message.type === 'answer.committed') {
         clearInitialSilenceTimer()
         clearPendingTranscript()
+        deliveryMetricsTrackerRef.current.suspend()
         automaticallyCommittedQuestionsRef.current.add(message.question_id)
         manualSubmissionRef.current = true
         pauseListening()
@@ -817,6 +871,7 @@ function useVoiceTurnController({
     syncBlockedRef.current = false
     disconnectedSnapshotDirtyRef.current = false
     hasSpokenRef.current = false
+    deliveryMetricsTrackerRef.current.reset(questionIdRef.current)
     setErrorMessage('')
     updatePhase('listening')
   }, [clearInitialSilenceTimer, updatePhase])
@@ -839,12 +894,22 @@ function useVoiceTurnController({
     manualSubmissionRef.current = true
     clearInitialSilenceTimer()
     clearPendingTranscript()
+
+    if (!speechActiveRef.current) {
+      deliveryMetricsTrackerRef.current.suspend()
+    }
+
     updatePhase('committing')
     return true
   }, [clearInitialSilenceTimer, clearPendingTranscript, updatePhase])
 
   const cancelManualSubmission = useCallback(() => {
     manualSubmissionRef.current = false
+
+    if (hasSpokenRef.current) {
+      deliveryMetricsTrackerRef.current.resume()
+    }
+
     updatePhase(syncBlockedRef.current ? 'sync_error' : 'listening')
 
     if (!hasSpokenRef.current && !syncBlockedRef.current) {
@@ -854,6 +919,10 @@ function useVoiceTurnController({
 
   const canSubmitManualAnswer = useCallback((targetQuestionId) => {
     return !automaticallyCommittedQuestionsRef.current.has(targetQuestionId)
+  }, [])
+
+  const createDeliverySnapshot = useCallback((text) => {
+    return deliveryMetricsTrackerRef.current.createSnapshot(text)
   }, [])
 
   const completeManualSubmission = useCallback(
@@ -893,6 +962,7 @@ function useVoiceTurnController({
     beginManualSubmission,
     cancelManualSubmission,
     canSubmitManualAnswer,
+    createDeliverySnapshot,
     completeManualSubmission,
   }
 }
