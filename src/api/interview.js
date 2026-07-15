@@ -17,6 +17,45 @@ export const startChatInterview = async () => {
 }
 
 /**
+ * 음성 면접 세션을 생성하고 첫 질문이 포함된 세션 응답을 반환한다.
+ *
+ * OpenAI Realtime은 지원자의 음성을 텍스트로 변환하는 역할만 담당한다.
+ * 실제 질문 생성과 면접 흐름은 이 API가 만든 voice 세션에서 관리한다.
+ *
+ * @returns {Promise<object>} 생성된 음성 면접 세션 응답
+ */
+export const startVoiceInterview = async () => {
+  const response = await apiClient.post('/sessions', {
+    mode: 'voice',
+  })
+
+  return response.data
+}
+
+/**
+ * 면접관 발화 텍스트를 백엔드 TTS로 전달하고 MP3 Blob을 반환한다.
+ *
+ * OpenAI API 키와 모델 설정은 백엔드가 관리한다. 프론트는 생성할 문장만
+ * 전달하며, 반환된 오디오 데이터는 Object URL로 바꿔 재생한다.
+ *
+ * @param {string} text 음성으로 재생할 면접관 발화
+ * @param {{ signal?: AbortSignal }} [options] 화면 이탈이나 재생 교체 시 요청을 취소하기 위한 옵션
+ * @returns {Promise<Blob>} 백엔드가 스트리밍한 MP3 음성 데이터
+ */
+export const generateInterviewSpeech = async (text, { signal } = {}) => {
+  const response = await apiClient.post(
+    '/interview/tts',
+    { text },
+    {
+      responseType: 'blob',
+      signal,
+    },
+  )
+
+  return response.data
+}
+
+/**
  * 진행 중인 채팅 면접 세션에 사용자 이벤트를 전송한다.
  *
  * 동일한 사용자 행동을 재시도할 때는 호출하는 쪽에서 최초 요청에 사용한
@@ -32,6 +71,31 @@ export const startChatInterview = async () => {
  * @returns {Promise<object>} 이벤트 처리 후의 전체 채팅 면접 세션 응답
  */
 export const sendChatEvent = async (
+  sessionId,
+  payload,
+  clientEventId,
+) => {
+  const encodedSessionId = encodeURIComponent(sessionId)
+  const response = await apiClient.post(`/sessions/${encodedSessionId}/events`, {
+    payload,
+    client_event_id: clientEventId,
+  })
+
+  return response.data
+}
+
+/**
+ * 진행 중인 음성 면접 세션에 사용자의 수동 답변을 전송한다.
+ *
+ * clientEventId는 한 번의 답변 행동에 대해 최초 생성한 값을 재시도에서도
+ * 그대로 사용해야 백엔드가 동일한 답변을 중복 처리하지 않는다.
+ *
+ * @param {string} sessionId 이벤트를 전송할 음성 면접 세션 ID
+ * @param {{ action: 'submit', text: string, submission_type: 'manual' }} payload 확정된 음성 답변 이벤트
+ * @param {string} clientEventId 사용자 행동별 멱등성 ID
+ * @returns {Promise<object>} 이벤트 처리 후의 전체 음성 면접 세션 응답
+ */
+export const sendVoiceEvent = async (
   sessionId,
   payload,
   clientEventId,

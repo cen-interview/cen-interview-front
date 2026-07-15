@@ -170,6 +170,7 @@ function QuestionReview({ item, index }) {
 function ReportPage() {
   const location = useLocation()
   const { interviewId } = useParams()
+  const isVoiceMode = location.state?.mode === 'voice'
   const immediateReport =
     location.state?.report ?? getChatInterviewReport(interviewId ?? '')
   const hasResultId = /^\d+$/.test(interviewId ?? '')
@@ -263,7 +264,7 @@ function ReportPage() {
         <section className="report-hero">
           <div className="report-hero__copy">
             <p className="report-hero__eyebrow">
-              <span>채팅 모드</span>
+              <span>{isVoiceMode ? '음성 모드' : '채팅 모드'}</span>
               AI 면접 연습
             </p>
             <h1>면접이 완료되었어요!</h1>
@@ -276,7 +277,7 @@ function ReportPage() {
 
           <div className="report-hero__visual">
             <div className="report-hero__bubble">
-              채팅 면접이 끝났어요!
+              {isVoiceMode ? '음성 면접' : '채팅 면접'}이 끝났어요!
               <br />
               결과를 확인해볼까요?
             </div>
