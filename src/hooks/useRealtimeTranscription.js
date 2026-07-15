@@ -9,16 +9,39 @@ const SILENCE_DURATION_MS = 800
 // 한 번에 녹음해서 보내는 음성 조각의 최대 길이야. 15초
 const MAX_CHUNK_DURATION_MS = 15000
 
+/**
+ * OpenAI Realtime 전사 연결과 브라우저 발화 구간을 관리한다.
+ *
+ * 화면용 누적 transcript 외에 Voice Turn WebSocket에서 사용할 수 있는 누적
+ * 전사 snapshot과 실제 발화 시작·종료 snapshot을 만든다. callback은 Ref로
+ * 보관하므로 호출하는 컴포넌트가 다시 렌더링돼도 WebRTC 연결을 재생성하지
+ * 않는다.
+ *
+ * @param {{
+ *   onPermissionGranted?: () => Promise<object>,
+ *   startListeningOnConnect?: boolean,
+ *   onTranscriptSnapshot?: (snapshot: { text: string, itemId: string, segmentFinal: boolean }) => void,
+ *   onSpeechActivityChange?: (snapshot: { speechActive: boolean, changedAt: number }) => void
+ * }} options 음성 세션 시작과 구조화된 STT 이벤트 callback
+ * @returns Realtime 상태, 누적 전사·발화 snapshot과 마이크 제어 함수
+ */
 function useRealtimeTranscription({
   onPermissionGranted,
   startListeningOnConnect = true,
+  onTranscriptSnapshot,
+  onSpeechActivityChange,
 } = {}) {
   // 화면에 전달할 최종 인식 문장과 현재 연결 상태
   const [transcript, setTranscript] = useState('')
+  const [speechActive, setSpeechActive] = useState(false)
+  const [transcriptSnapshot, setTranscriptSnapshot] = useState(null)
+  const [activitySnapshot, setActivitySnapshot] = useState(null)
   const [status, setStatus] = useState('requesting-permission')
   const [error, setError] = useState('')
   const onPermissionGrantedRef = useRef(onPermissionGranted)
   const startListeningOnConnectRef = useRef(startListeningOnConnect)
+  const onTranscriptSnapshotRef = useRef(onTranscriptSnapshot)
+  const onSpeechActivityChangeRef = useRef(onSpeechActivityChange)
   const audioTrackRef = useRef(null)
   const dataChannelRef = useRef(null)
   const startVolumeMonitoringRef = useRef(() => {})
@@ -33,6 +56,14 @@ function useRealtimeTranscription({
   useEffect(() => {
     startListeningOnConnectRef.current = startListeningOnConnect
   }, [startListeningOnConnect])
+
+  useEffect(() => {
+    onTranscriptSnapshotRef.current = onTranscriptSnapshot
+  }, [onTranscriptSnapshot])
+
+  useEffect(() => {
+    onSpeechActivityChangeRef.current = onSpeechActivityChange
+  }, [onSpeechActivityChange])
 
   // TTS 재생 직전 마이크 전송과 브라우저 음량 감지를 함께 멈춘다.
   const pauseListening = useCallback(() => {
@@ -98,12 +129,40 @@ function useRealtimeTranscription({
 
     const segments = new Map()
     let segmentOrder = 0
-    let hasSpeech = false
+    let bufferHasSpeech = false
+    let speechActiveValue = false
     let speechStartedAt = 0
     let lastSpeechAt = 0
     let pendingCommitCount = 0
     let transcriptValue = ''
     const finalizationWaiters = []
+
+    // 발화 상태가 실제로 변경된 순간에만 상태와 선택적 callback을 갱신한다.
+    const updateSpeechActivity = (nextSpeechActive) => {
+      if (speechActiveValue === nextSpeechActive) {
+        return
+      }
+
+      speechActiveValue = nextSpeechActive
+
+      if (disposed) {
+        return
+      }
+
+      const nextActivitySnapshot = {
+        speechActive: nextSpeechActive,
+        changedAt: Date.now(),
+      }
+
+      setSpeechActive(nextSpeechActive)
+      setActivitySnapshot(nextActivitySnapshot)
+
+      try {
+        onSpeechActivityChangeRef.current?.(nextActivitySnapshot)
+      } catch {
+        // 화면 callback 오류가 마이크와 Realtime 연결을 중단시키지 않게 한다.
+      }
+    }
 
     const resolveFinalizationWaiters = () => {
       if (pendingCommitCount > 0) {
@@ -117,14 +176,17 @@ function useRealtimeTranscription({
     }
 
     resetTranscriptRef.current = () => {
+      updateSpeechActivity(false)
       segments.clear()
       segmentOrder = 0
       transcriptValue = ''
       setTranscript('')
+      setTranscriptSnapshot(null)
+      setActivitySnapshot(null)
     }
 
     // 발화 단위로 받은 텍스트 조각들을 화면에 표시할 한 문장으로 합친다.
-    const updateTranscript = () => {
+    const updateTranscript = (itemId, segmentFinal) => {
       const nextTranscript = [...segments.values()]
         .sort((first, second) => first.order - second.order)
         .map((segment) => segment.text.trim())
@@ -135,6 +197,20 @@ function useRealtimeTranscription({
 
       if (!disposed) {
         setTranscript(nextTranscript)
+
+        const nextTranscriptSnapshot = {
+          text: nextTranscript,
+          itemId,
+          segmentFinal,
+        }
+
+        setTranscriptSnapshot(nextTranscriptSnapshot)
+
+        try {
+          onTranscriptSnapshotRef.current?.(nextTranscriptSnapshot)
+        } catch {
+          // 화면 callback 오류가 이후 STT 이벤트 처리를 막지 않게 한다.
+        }
       }
     }
 
@@ -152,12 +228,12 @@ function useRealtimeTranscription({
 
       const segment = segments.get(itemId)
       segment.text = isCompleted ? event.transcript : segment.text + event.delta
-      updateTranscript()
+      updateTranscript(itemId, isCompleted)
     }
 
     // 이 모델은 서버 VAD를 사용하지 않으므로 브라우저가 오디오 구간을 직접 확정한다.
-    const commitAudio = () => {
-      if (dataChannel?.readyState !== 'open' || !hasSpeech) {
+    const commitAudio = ({ preserveActivity = false } = {}) => {
+      if (dataChannel?.readyState !== 'open' || !bufferHasSpeech) {
         return false
       }
 
@@ -169,9 +245,13 @@ function useRealtimeTranscription({
 
       pendingCommitCount += 1
 
-      hasSpeech = false
+      bufferHasSpeech = false
       speechStartedAt = 0
-      lastSpeechAt = 0
+
+      if (!preserveActivity) {
+        lastSpeechAt = 0
+      }
+
       return true
     }
 
@@ -200,24 +280,30 @@ function useRealtimeTranscription({
         const volume = Math.sqrt(meanSquare)
 
         if (volume >= SILENCE_THRESHOLD) {
-          if (!hasSpeech) {
-            hasSpeech = true
+          if (!bufferHasSpeech) {
+            bufferHasSpeech = true
             speechStartedAt = now
           }
+
           lastSpeechAt = now
+          updateSpeechActivity(true)
         }
 
         const silenceDetected =
-          hasSpeech &&
+          speechActiveValue &&
           lastSpeechAt > 0 &&
           now - lastSpeechAt >= SILENCE_DURATION_MS
         const chunkIsFull =
-          hasSpeech &&
+          bufferHasSpeech &&
           speechStartedAt > 0 &&
           now - speechStartedAt >= MAX_CHUNK_DURATION_MS
 
-        if (silenceDetected || chunkIsFull) {
+        if (silenceDetected) {
           commitAudio()
+          updateSpeechActivity(false)
+        } else if (chunkIsFull) {
+          // 긴 발화를 조각으로 나눌 뿐 실제 발화 종료 상태로 바꾸지는 않는다.
+          commitAudio({ preserveActivity: true })
         }
 
         animationFrameId = requestAnimationFrame(detectSilence)
@@ -232,9 +318,10 @@ function useRealtimeTranscription({
         animationFrameId = undefined
       }
 
-      hasSpeech = false
+      bufferHasSpeech = false
       speechStartedAt = 0
       lastSpeechAt = 0
+      updateSpeechActivity(false)
     }
 
     startVolumeMonitoringRef.current = startVolumeMonitoring
@@ -508,6 +595,9 @@ function useRealtimeTranscription({
 
   return {
     transcript,
+    speechActive,
+    transcriptSnapshot,
+    activitySnapshot,
     status,
     error,
     listening: status === 'listening',
