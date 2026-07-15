@@ -111,6 +111,7 @@ function VoiceInterviewSession({ accessToken }) {
     status: voiceTurnStatus,
     errorMessage: voiceTurnErrorMessage,
     readyState: voiceTurnReadyState,
+    reconnectAttempt: voiceTurnReconnectAttempt,
     sendMessage: sendVoiceTurnMessage,
     subscribe: subscribeVoiceTurn,
     reconnect: reconnectVoiceTurn,
@@ -144,6 +145,8 @@ function VoiceInterviewSession({ accessToken }) {
     status === 'permission-denied' ||
     status === 'unsupported'
   const isVoiceTurnFailed = voiceTurnStatus === 'error'
+  const isVoiceTurnReconnecting = voiceTurnStatus === 'reconnecting'
+  const hasStartedVoiceTurn = voiceTurnController.phase !== 'idle'
   const isVoiceTurnReady =
     voiceTurnStatus === 'ready' &&
     voiceTurnReadyState?.sessionId === session?.session_id &&
@@ -174,7 +177,10 @@ function VoiceInterviewSession({ accessToken }) {
     'committing',
   ].includes(voiceTurnController.phase)
   const isInteractionBusy =
-    isSpeechBusy || isSubmitting || controllerLocksInteraction
+    isSpeechBusy ||
+    isSubmitting ||
+    controllerLocksInteraction ||
+    isVoiceTurnReconnecting
 
   /**
    * 현재 질문의 발화 큐를 순서대로 재생한 뒤 지원자 마이크를 연다.
@@ -370,7 +376,10 @@ function VoiceInterviewSession({ accessToken }) {
     sessionPhase === 'starting' ||
     status === 'requesting-permission' ||
     status === 'connecting' ||
-    (Boolean(session && !session.finished) && !isVoiceTurnReady)
+    (Boolean(session && !session.finished) &&
+      !isVoiceTurnReady &&
+      (!isVoiceTurnReconnecting || !hasStartedVoiceTurn) &&
+      (!isVoiceTurnFailed || !hasStartedVoiceTurn))
   let voiceStatusTitle = recognitionStatus
   let voiceStatusMessage = recognitionMessage
 
@@ -416,7 +425,26 @@ function VoiceInterviewSession({ accessToken }) {
     voiceStatusMessage = '이어서 말씀해 주세요'
   }
 
-  if (sessionPhase === 'error' || isRecognitionFailed || isVoiceTurnFailed) {
+  if (isVoiceTurnReconnecting) {
+    voiceStatusTitle = '음성 연결을 복구하고 있어요'
+    voiceStatusMessage = `현재까지의 답변은 유지됩니다 · ${voiceTurnReconnectAttempt || 1}번째 시도`
+  }
+
+  if (voiceTurnController.phase === 'sync_error') {
+    voiceStatusTitle = '자동 답변 동기화를 중단했어요'
+    voiceStatusMessage = '현재 답변을 확인한 뒤 수동으로 제출해 주세요'
+  }
+
+  if (isVoiceTurnFailed && hasStartedVoiceTurn) {
+    voiceStatusTitle = '음성 연결이 중단됐어요'
+    voiceStatusMessage = '현재 답변을 유지한 채 다시 연결할 수 있습니다'
+  }
+
+  if (
+    sessionPhase === 'error' ||
+    isRecognitionFailed ||
+    (isVoiceTurnFailed && !hasStartedVoiceTurn)
+  ) {
     return (
       <VoiceSessionState
         errorMessage={initializationError}
@@ -529,20 +557,37 @@ function VoiceInterviewSession({ accessToken }) {
             <div aria-live="polite">
               {(answerErrorMessage ||
                 voiceTurnController.errorMessage ||
+                voiceTurnErrorMessage ||
                 confirmationSpeechErrorMessage) && (
                 <p className="live-answer__error">
                   {answerErrorMessage ||
                     voiceTurnController.errorMessage ||
+                    voiceTurnErrorMessage ||
                     confirmationSpeechErrorMessage}
                 </p>
               )}
             </div>
             <button
               type="button"
-              disabled={isInteractionBusy || status !== 'listening'}
-              onClick={() => void handleAnswerSubmit()}
+              disabled={
+                isVoiceTurnFailed
+                  ? false
+                  : isInteractionBusy || status !== 'listening'
+              }
+              onClick={() => {
+                if (isVoiceTurnFailed) {
+                  reconnectVoiceTurn(session?.question?.question_id)
+                  return
+                }
+
+                void handleAnswerSubmit()
+              }}
             >
-              {isSubmitting ? '답변 정리 중...' : '답변 완료'}
+              {isVoiceTurnFailed
+                ? '다시 연결'
+                : isSubmitting
+                  ? '답변 정리 중...'
+                  : '답변 완료'}
             </button>
           </footer>
         </section>

@@ -61,6 +61,11 @@ function useVoiceTurnController({
   const socketReadyRef = useRef(false)
   const automaticallyCommittedQuestionsRef = useRef(new Set())
   const cancelledConfirmationIdsRef = useRef(new Set())
+  const previousSocketStatusRef = useRef(socketStatus)
+  const reconnectPendingRef = useRef(false)
+  const phaseBeforeReconnectRef = useRef('idle')
+  const syncBlockedRef = useRef(false)
+  const disconnectedSnapshotDirtyRef = useRef(false)
 
   const updatePhase = useCallback((nextPhase) => {
     phaseRef.current = nextPhase
@@ -74,6 +79,28 @@ function useVoiceTurnController({
     }
 
     pendingSnapshotRef.current = null
+  }, [])
+
+  const preserveDisconnectedSnapshot = useCallback((snapshot) => {
+    const text = snapshot?.text?.trim()
+
+    if (!text || text === answerTextRef.current) {
+      return
+    }
+
+    if (!disconnectedSnapshotDirtyRef.current) {
+      revisionRef.current += 1
+      disconnectedSnapshotDirtyRef.current = true
+      setRevision(revisionRef.current)
+    }
+
+    answerTextRef.current = text
+    lastSentSnapshotRef.current = {
+      text,
+      segmentFinal: Boolean(snapshot.segmentFinal),
+      speechActive: speechActiveRef.current,
+    }
+    setAnswerText(text)
   }, [])
 
   useEffect(() => {
@@ -95,6 +122,10 @@ function useVoiceTurnController({
     manualSubmissionRef.current = false
     lastSentAtRef.current = 0
     lastSentSnapshotRef.current = null
+    reconnectPendingRef.current = false
+    phaseBeforeReconnectRef.current = 'idle'
+    syncBlockedRef.current = false
+    disconnectedSnapshotDirtyRef.current = false
     setRevision(initialRevision)
     setAnswerText('')
     setSpeechActive(false)
@@ -102,6 +133,57 @@ function useVoiceTurnController({
     setErrorMessage('')
     updatePhase('idle')
   }, [clearPendingTranscript, questionId, sessionId, updatePhase])
+
+  useEffect(() => {
+    const previousStatus = previousSocketStatusRef.current
+    previousSocketStatusRef.current = socketStatus
+
+    if (previousStatus !== 'ready' || socketStatus !== 'reconnecting') {
+      return
+    }
+
+    preserveDisconnectedSnapshot(pendingSnapshotRef.current)
+    clearPendingTranscript()
+    reconnectPendingRef.current = true
+    if (phaseRef.current !== 'reconnecting') {
+      phaseBeforeReconnectRef.current = phaseRef.current
+    }
+    pauseListening()
+
+    const activeConfirmation = confirmationRef.current
+    if (activeConfirmation) {
+      cancelledConfirmationIdsRef.current.add(
+        activeConfirmation.confirmationId,
+      )
+      stopConfirmation()
+      modeRef.current = 'answer'
+      confirmationRef.current = null
+      revisionRef.current = activeConfirmation.baseRevision
+      answerTextRef.current = activeConfirmation.baseAnswer
+      lastSentSnapshotRef.current = {
+        text: activeConfirmation.baseAnswer,
+        segmentFinal: false,
+        speechActive: false,
+      }
+      setRevision(activeConfirmation.baseRevision)
+      setAnswerText(activeConfirmation.baseAnswer)
+      setConfirmation(null)
+      replaceTranscript(activeConfirmation.baseAnswer)
+      phaseBeforeReconnectRef.current = 'listening'
+    }
+
+    speechActiveRef.current = false
+    setSpeechActive(false)
+    updatePhase('reconnecting')
+  }, [
+    clearPendingTranscript,
+    pauseListening,
+    preserveDisconnectedSnapshot,
+    replaceTranscript,
+    socketStatus,
+    stopConfirmation,
+    updatePhase,
+  ])
 
   useEffect(() => {
     automaticallyCommittedQuestionsRef.current.clear()
@@ -126,6 +208,7 @@ function useVoiceTurnController({
     (snapshot) => {
       if (
         manualSubmissionRef.current ||
+        syncBlockedRef.current ||
         modeRef.current !== 'answer' ||
         !socketReadyRef.current ||
         !sessionIdRef.current ||
@@ -160,10 +243,12 @@ function useVoiceTurnController({
       })
 
       if (!sent) {
+        preserveDisconnectedSnapshot(snapshot)
         return false
       }
 
       revisionRef.current = nextRevision
+      disconnectedSnapshotDirtyRef.current = false
       answerTextRef.current = text
       lastSentAtRef.current = Date.now()
       lastSentSnapshotRef.current = {
@@ -180,7 +265,7 @@ function useVoiceTurnController({
       )
       return true
     },
-    [sendMessage, updatePhase],
+    [preserveDisconnectedSnapshot, sendMessage, updatePhase],
   )
 
   const flushPendingTranscript = useCallback(() => {
@@ -243,6 +328,11 @@ function useVoiceTurnController({
         return
       }
 
+      if (!socketReadyRef.current && reconnectPendingRef.current) {
+        preserveDisconnectedSnapshot(snapshot)
+        return
+      }
+
       if (
         manualSubmissionRef.current ||
         !['listening', 'judging', 'barge_in'].includes(phaseRef.current)
@@ -275,6 +365,7 @@ function useVoiceTurnController({
       clearPendingTranscript,
       flushPendingTranscript,
       handleConfirmationTranscript,
+      preserveDisconnectedSnapshot,
       publishTranscript,
     ],
   )
@@ -325,6 +416,7 @@ function useVoiceTurnController({
 
       if (
         manualSubmissionRef.current ||
+        syncBlockedRef.current ||
         modeRef.current !== 'answer' ||
         !socketReadyRef.current ||
         !questionIdRef.current
@@ -442,16 +534,100 @@ function useVoiceTurnController({
   const handleServerMessage = useCallback(
     (message) => {
       if (message.type === 'connection.ready') {
-        if (message.question_id === questionIdRef.current) {
+        if (!reconnectPendingRef.current) {
+          if (message.question_id === questionIdRef.current) {
+            revisionRef.current = message.revision
+            setRevision(message.revision)
+          }
+          return
+        }
+
+        reconnectPendingRef.current = false
+
+        if (message.question_id !== questionIdRef.current) {
+          syncBlockedRef.current = true
+          setErrorMessage(
+            '서버가 이미 다른 질문으로 이동했습니다. 음성 연결을 다시 시작해 주세요.',
+          )
+          updatePhase('sync_error')
+          return
+        }
+
+        if (revisionRef.current < message.revision) {
+          syncBlockedRef.current = true
+          setErrorMessage(
+            '서버에 더 최신 답변이 있어 자동 동기화를 중단했습니다. 현재 답변을 수동으로 제출해 주세요.',
+          )
+          resumeListening()
+          updatePhase('sync_error')
+          return
+        }
+
+        if (answerTextRef.current) {
+          const latestSnapshot = lastSentSnapshotRef.current
+          const synchronized = sendMessage({
+            type: 'answer.transcript.updated',
+            question_id: questionIdRef.current,
+            revision: revisionRef.current,
+            text: answerTextRef.current,
+            speech_active: false,
+            segment_final: latestSnapshot?.segmentFinal ?? false,
+          })
+
+          if (!synchronized) {
+            setErrorMessage('보존한 답변을 다시 연결하지 못했습니다.')
+            syncBlockedRef.current = true
+            resumeListening()
+            updatePhase('sync_error')
+            return
+          }
+        } else {
           revisionRef.current = message.revision
           setRevision(message.revision)
+        }
+
+        syncBlockedRef.current = false
+        disconnectedSnapshotDirtyRef.current = false
+        setErrorMessage('')
+
+        if (
+          message.state === 'listening' &&
+          ['listening', 'judging', 'barge_in'].includes(
+            phaseBeforeReconnectRef.current,
+          )
+        ) {
+          resumeListening()
+          updatePhase('listening')
+        } else if (message.state === 'committing') {
+          updatePhase('committing')
+        } else {
+          updatePhase(phaseBeforeReconnectRef.current)
         }
         return
       }
 
       if (message.type === 'error') {
+        if (
+          ['turn_commit_in_progress', 'worker_not_available'].includes(
+            message.code,
+          )
+        ) {
+          if (phaseRef.current !== 'reconnecting') {
+            phaseBeforeReconnectRef.current = phaseRef.current
+          }
+          pauseListening()
+          updatePhase('reconnecting')
+          return
+        }
+
         if (message.recoverable) {
           setErrorMessage(message.message || '자동 제출을 처리하지 못했습니다.')
+
+          if (message.code === 'revision_conflict') {
+            syncBlockedRef.current = true
+            updatePhase('sync_error')
+            return
+          }
 
           if (message.code === 'commit_failed') {
             manualSubmissionRef.current = false
@@ -518,6 +694,7 @@ function useVoiceTurnController({
       pauseListening,
       restoreAnswerAfterConfirmation,
       resumeListening,
+      sendMessage,
       stopConfirmation,
       updatePhase,
     ],
@@ -528,6 +705,8 @@ function useVoiceTurnController({
   const startQuestion = useCallback(() => {
     manualSubmissionRef.current = false
     modeRef.current = 'answer'
+    syncBlockedRef.current = false
+    disconnectedSnapshotDirtyRef.current = false
     setErrorMessage('')
     updatePhase('listening')
   }, [updatePhase])
@@ -536,7 +715,9 @@ function useVoiceTurnController({
     if (
       manualSubmissionRef.current ||
       modeRef.current !== 'answer' ||
-      !['listening', 'judging', 'barge_in'].includes(phaseRef.current)
+      !['listening', 'judging', 'barge_in', 'sync_error'].includes(
+        phaseRef.current,
+      )
     ) {
       return false
     }
@@ -549,7 +730,7 @@ function useVoiceTurnController({
 
   const cancelManualSubmission = useCallback(() => {
     manualSubmissionRef.current = false
-    updatePhase('listening')
+    updatePhase(syncBlockedRef.current ? 'sync_error' : 'listening')
   }, [updatePhase])
 
   const canSubmitManualAnswer = useCallback((targetQuestionId) => {

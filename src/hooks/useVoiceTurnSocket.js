@@ -2,6 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createVoiceTurnSocket } from '../api/voiceTurnSocket.js'
 
 const AUTHENTICATION_TIMEOUT_MS = 6500
+const RECONNECT_DELAYS_MS = [500, 1000, 2000, 4000, 8000]
+const RECONNECT_JITTER_MS = 250
+const RECONNECTABLE_FATAL_CODES = new Set([
+  'turn_commit_in_progress',
+  'worker_not_available',
+])
 const SERVER_STATES = new Set([
   'listening',
   'complete_candidate',
@@ -43,10 +49,11 @@ const getServerErrorMessage = (message) => {
  *   enabled?: boolean
  * }} options 연결에 필요한 음성 세션과 인증 정보
  * @returns {{
- *   status: 'idle' | 'connecting' | 'authenticating' | 'ready' | 'disconnected' | 'error',
+ *   status: 'idle' | 'connecting' | 'authenticating' | 'ready' | 'reconnecting' | 'disconnected' | 'error',
  *   errorMessage: string,
  *   readyState: { sessionId: string, questionId: string, revision: number, serverState: string } | null,
  *   lastMessage: object | null,
+ *   reconnectAttempt: number,
  *   sendMessage: (message: object) => boolean,
  *   subscribe: (listener: (message: object) => void) => () => void,
  *   reconnect: (nextQuestionId?: string) => void,
@@ -64,12 +71,16 @@ function useVoiceTurnSocket({
   const [readyState, setReadyState] = useState(null)
   const [lastMessage, setLastMessage] = useState(null)
   const [connectionAttempt, setConnectionAttempt] = useState(0)
+  const [reconnectAttempt, setReconnectAttempt] = useState(0)
   const socketRef = useRef(null)
   const connectionGenerationRef = useRef(0)
   const statusRef = useRef('idle')
   const questionIdRef = useRef(questionId)
   const reconnectQuestionIdRef = useRef(null)
   const messageListenersRef = useRef(new Set())
+  const reconnectAttemptRef = useRef(0)
+  const reconnectTimerRef = useRef()
+  const reconnectCycleRef = useRef(false)
 
   useEffect(() => {
     questionIdRef.current = questionId
@@ -80,7 +91,52 @@ function useVoiceTurnSocket({
     setStatus(nextStatus)
   }, [])
 
+  const clearReconnectTimer = useCallback(() => {
+    if (reconnectTimerRef.current) {
+      window.clearTimeout(reconnectTimerRef.current)
+      reconnectTimerRef.current = undefined
+    }
+  }, [])
+
+  const scheduleReconnect = useCallback(
+    (message, minimumDelay = 0) => {
+      if (!enabled || !sessionId || !accessToken || reconnectTimerRef.current) {
+        return false
+      }
+
+      const nextAttempt = reconnectAttemptRef.current + 1
+
+      if (nextAttempt > RECONNECT_DELAYS_MS.length) {
+        reconnectCycleRef.current = false
+        setErrorMessage(
+          message || '음성 연결을 자동으로 복구하지 못했습니다.',
+        )
+        updateStatus('error')
+        return false
+      }
+
+      const backoffDelay = RECONNECT_DELAYS_MS[nextAttempt - 1]
+      const jitter = Math.floor(Math.random() * RECONNECT_JITTER_MS)
+      const delay = Math.max(backoffDelay + jitter, minimumDelay)
+
+      reconnectAttemptRef.current = nextAttempt
+      reconnectCycleRef.current = true
+      setReconnectAttempt(nextAttempt)
+      setReadyState(null)
+      setErrorMessage('')
+      updateStatus('reconnecting')
+      reconnectTimerRef.current = window.setTimeout(() => {
+        reconnectTimerRef.current = undefined
+        setConnectionAttempt((currentAttempt) => currentAttempt + 1)
+      }, delay)
+      return true
+    },
+    [accessToken, enabled, sessionId, updateStatus],
+  )
+
   const disconnect = useCallback(() => {
+    clearReconnectTimer()
+    reconnectCycleRef.current = false
     connectionGenerationRef.current += 1
     const socket = socketRef.current
     socketRef.current = null
@@ -91,14 +147,30 @@ function useVoiceTurnSocket({
 
     setReadyState(null)
     updateStatus('disconnected')
-  }, [updateStatus])
+  }, [clearReconnectTimer, updateStatus])
 
   const reconnect = useCallback((nextQuestionId) => {
+    clearReconnectTimer()
+    reconnectAttemptRef.current = 0
+    reconnectCycleRef.current = true
     reconnectQuestionIdRef.current = nextQuestionId?.trim() || null
     setErrorMessage('')
     setReadyState(null)
+    setReconnectAttempt(0)
+    updateStatus('reconnecting')
     setConnectionAttempt((currentAttempt) => currentAttempt + 1)
-  }, [])
+  }, [clearReconnectTimer, updateStatus])
+
+  useEffect(() => {
+    clearReconnectTimer()
+    reconnectAttemptRef.current = 0
+    reconnectCycleRef.current = false
+    setReconnectAttempt(0)
+  }, [clearReconnectTimer, sessionId])
+
+  useEffect(() => {
+    return () => clearReconnectTimer()
+  }, [clearReconnectTimer])
 
   const subscribe = useCallback((listener) => {
     messageListenersRef.current.add(listener)
@@ -125,6 +197,9 @@ function useVoiceTurnSocket({
     reconnectQuestionIdRef.current = null
 
     if (!enabled || !sessionId || !expectedQuestionId || !accessToken) {
+      clearReconnectTimer()
+      reconnectAttemptRef.current = 0
+      reconnectCycleRef.current = false
       connectionGenerationRef.current += 1
       const currentSocket = socketRef.current
       socketRef.current = null
@@ -136,6 +211,7 @@ function useVoiceTurnSocket({
       setErrorMessage('')
       setReadyState(null)
       setLastMessage(null)
+      setReconnectAttempt(0)
       updateStatus('idle')
       return undefined
     }
@@ -146,6 +222,10 @@ function useVoiceTurnSocket({
     let authenticationTimeoutId
     let connectionFailed = false
     let intentionallyClosed = false
+    let reconnectAfterClose = false
+    let reconnectDelay = 0
+    let reconnectMessage = ''
+    const isReconnectCycle = reconnectCycleRef.current
 
     const isCurrentConnection = () => {
       return (
@@ -167,18 +247,33 @@ function useVoiceTurnSocket({
       updateStatus('error')
     }
 
+    const closeForReconnect = (message, minimumDelay = 0) => {
+      if (!isCurrentConnection()) {
+        return
+      }
+
+      reconnectAfterClose = true
+      reconnectMessage = message
+      reconnectDelay = minimumDelay
+      window.clearTimeout(authenticationTimeoutId)
+      socket.close(1012, 'temporary connection failure')
+    }
+
     try {
       socket = createVoiceTurnSocket(sessionId)
       socketRef.current = socket
       setErrorMessage('')
       setReadyState(null)
-      setLastMessage(null)
-      updateStatus('connecting')
+      if (!isReconnectCycle) {
+        setLastMessage(null)
+        updateStatus('connecting')
+      } else {
+        updateStatus('reconnecting')
+      }
     } catch (connectionError) {
-      setErrorMessage(
+      scheduleReconnect(
         connectionError.message || '음성 면접 실시간 연결을 만들지 못했습니다.',
       )
-      updateStatus('error')
       return undefined
     }
 
@@ -187,7 +282,9 @@ function useVoiceTurnSocket({
         return
       }
 
-      updateStatus('authenticating')
+      if (!isReconnectCycle) {
+        updateStatus('authenticating')
+      }
       socket.send(
         JSON.stringify({
           type: 'connection.authenticate',
@@ -196,8 +293,7 @@ function useVoiceTurnSocket({
       )
 
       authenticationTimeoutId = window.setTimeout(() => {
-        failConnection('음성 면접 연결 인증 시간이 초과되었습니다.')
-        socket.close(1000, 'authentication timeout')
+        closeForReconnect('음성 면접 연결 인증 시간이 초과되었습니다.')
       }, AUTHENTICATION_TIMEOUT_MS)
     }
 
@@ -231,6 +327,14 @@ function useVoiceTurnSocket({
           return
         }
 
+        if (RECONNECTABLE_FATAL_CODES.has(message.code)) {
+          closeForReconnect(
+            getServerErrorMessage(message),
+            message.code === 'turn_commit_in_progress' ? 1000 : 0,
+          )
+          return
+        }
+
         failConnection(getServerErrorMessage(message))
         socket.close(1000, 'fatal server error')
         return
@@ -258,6 +362,10 @@ function useVoiceTurnSocket({
           serverState: message.state,
         })
         setErrorMessage('')
+        clearReconnectTimer()
+        reconnectAttemptRef.current = 0
+        reconnectCycleRef.current = false
+        setReconnectAttempt(0)
         updateStatus('ready')
       }
 
@@ -289,7 +397,7 @@ function useVoiceTurnSocket({
     }
 
     const handleError = () => {
-      failConnection('음성 면접 실시간 연결을 열지 못했습니다.')
+      closeForReconnect('음성 면접 실시간 연결을 열지 못했습니다.')
     }
 
     const handleClose = () => {
@@ -301,9 +409,11 @@ function useVoiceTurnSocket({
       socketRef.current = null
       setReadyState(null)
 
-      if (!connectionFailed) {
-        setErrorMessage('음성 면접 실시간 연결이 종료되었습니다.')
-        updateStatus('error')
+      if (reconnectAfterClose || !connectionFailed) {
+        scheduleReconnect(
+          reconnectMessage || '음성 면접 실시간 연결이 종료되었습니다.',
+          reconnectDelay,
+        )
       }
     }
 
@@ -330,8 +440,10 @@ function useVoiceTurnSocket({
     }
   }, [
     accessToken,
+    clearReconnectTimer,
     connectionAttempt,
     enabled,
+    scheduleReconnect,
     sessionId,
     updateStatus,
   ])
@@ -341,6 +453,7 @@ function useVoiceTurnSocket({
     errorMessage,
     readyState,
     lastMessage,
+    reconnectAttempt,
     sendMessage,
     subscribe,
     reconnect,
