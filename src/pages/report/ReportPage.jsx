@@ -1,5 +1,7 @@
 import { Link, useLocation, useParams } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import reportMascotImage from '../../assets/images/report-mascot.png'
+import { getInterviewResult } from '../../api/interview.js'
 import AppBrand from '../../components/common/AppBrand'
 import AppHeader from '../../components/common/AppHeader'
 import { ROUTES } from '../../constants/routes'
@@ -168,8 +170,32 @@ function QuestionReview({ item, index }) {
 function ReportPage() {
   const location = useLocation()
   const { interviewId } = useParams()
-  const report =
+  const immediateReport =
     location.state?.report ?? getChatInterviewReport(interviewId ?? '')
+  const hasResultId = /^\d+$/.test(interviewId ?? '')
+  const reportQuery = useQuery({
+    queryKey: ['interview-results', 'detail', interviewId],
+    queryFn: () => getInterviewResult(interviewId),
+    enabled: !immediateReport && hasResultId,
+  })
+  const report = immediateReport ?? reportQuery.data
+
+  if (!report && reportQuery.isPending && reportQuery.fetchStatus === 'fetching') {
+    return (
+      <div className="report-page">
+        <AppHeader>
+          <Link className="report-header__home" to={ROUTES.HOME}>
+            <LineIcon name="home" />
+            홈으로
+          </Link>
+        </AppHeader>
+        <main className="report-empty" aria-live="polite">
+          <h1>면접 결과를 불러오고 있어요.</h1>
+          <p>잠시만 기다려주세요.</p>
+        </main>
+      </div>
+    )
+  }
 
   if (!report) {
     return (
@@ -183,10 +209,20 @@ function ReportPage() {
         <main className="report-empty">
           <h1>면접 결과를 불러올 수 없어요.</h1>
           <p>
-            현재 백엔드에서는 종료된 면접 결과를 다시 조회할 수 없습니다.
-            새로운 채팅 면접을 시작해주세요.
+            저장된 면접 결과가 없거나 조회 중 문제가 발생했습니다.
+            잠시 후 다시 시도해주세요.
           </p>
-          <Link to={ROUTES.MODE_SELECT}>면접 모드 선택으로 이동</Link>
+          {reportQuery.isError && hasResultId ? (
+            <button
+              type="button"
+              onClick={() => reportQuery.refetch()}
+              disabled={reportQuery.isFetching}
+            >
+              {reportQuery.isFetching ? '다시 불러오는 중' : '다시 시도'}
+            </button>
+          ) : (
+            <Link to={ROUTES.MODE_SELECT}>면접 모드 선택으로 이동</Link>
+          )}
         </main>
       </div>
     )

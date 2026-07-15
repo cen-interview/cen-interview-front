@@ -44,3 +44,49 @@ export const sendChatEvent = async (
 
   return response.data
 }
+
+/**
+ * 현재 사용자의 완료된 면접 기록과 요약 통계를 조회한다.
+ *
+ * 페이지 번호는 백엔드 계약에 맞춰 1부터 시작한다. 응답의 summary는
+ * 마이페이지 통계 카드에, items는 연습 기록 목록에 사용한다.
+ *
+ * @param {number} [page=1] 조회할 페이지 번호
+ * @param {number} [size=10] 페이지당 기록 수
+ * @returns {Promise<{
+ *   summary: { total_practice_count: number, average_score: number | null },
+ *   items: Array<{
+ *     result_id: number,
+ *     session_id: string,
+ *     completed_at: string,
+ *     mode: 'chat' | 'voice',
+ *     overall_score: number
+ *   }>,
+ *   page: number,
+ *   size: number,
+ *   total: number
+ * }>} 면접 기록과 요약 통계
+ */
+export const getInterviewHistory = async (page = 1, size = 10) => {
+  const response = await apiClient.get('/interview-results/history', {
+    params: { page, size },
+  })
+
+  return response.data
+}
+
+/**
+ * 저장된 면접 결과 ID로 과거 리포트를 조회한다.
+ *
+ * 상세 API 응답은 리포트 외의 결과 메타데이터를 함께 포함할 수 있으므로
+ * 화면에서 바로 사용할 수 있도록 report 필드만 반환한다.
+ *
+ * @param {number | string} resultId 조회할 면접 결과 ID
+ * @returns {Promise<object>} 저장된 최종 면접 리포트
+ */
+export const getInterviewResult = async (resultId) => {
+  const encodedResultId = encodeURIComponent(resultId)
+  const response = await apiClient.get(`/interview-results/${encodedResultId}`)
+
+  return response.data.report
+}

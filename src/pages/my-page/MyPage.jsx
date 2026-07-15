@@ -12,6 +12,7 @@ import {
   getGitHubSources,
   startEvidenceIndex,
 } from '../../api/githubEvidence.js'
+import { getInterviewHistory } from '../../api/interview.js'
 import AppHeader from '../../components/common/AppHeader'
 import { ROUTES } from '../../constants/routes'
 import { useAuthStore } from '../../store/authStore.js'
@@ -23,7 +24,13 @@ const GITHUB_QUERY_KEYS = {
   status: ['evidence', 'index', 'status'],
   summary: ['evidence', 'summary'],
 }
+const INTERVIEW_HISTORY_QUERY_KEY = ['interview-results', 'history', 1, 10]
 const EMPTY_GITHUB_SOURCES = []
+const EMPTY_PRACTICE_RECORDS = []
+const MODE_PRESENTATION = {
+  chat: { label: '채팅 모드', icon: 'CH' },
+  voice: { label: '음성 모드', icon: 'VO' },
+}
 
 function isGitHubRepositoryUrl(value) {
   try {
@@ -90,40 +97,45 @@ function formatIndexedAt(value) {
   }).format(new Date(value))
 }
 
-const practiceRecords = [
-  {
-    id: 'practice-240628',
-    date: '2026. 06. 28',
-    day: '어제',
-    mode: '음성 모드',
-    role: '백엔드 개발자',
-    score: 86,
-  },
-  {
-    id: 'practice-240624',
-    date: '2026. 06. 24',
-    day: '5일 전',
-    mode: '채팅 모드',
-    role: 'Java · Spring',
-    score: 82,
-  },
-  {
-    id: 'practice-240619',
-    date: '2026. 06. 19',
-    day: '10일 전',
-    mode: '음성 모드',
-    role: 'CS 기본',
-    score: 78,
-  },
-  {
-    id: 'practice-240612',
-    date: '2026. 06. 12',
-    day: '17일 전',
-    mode: '채팅 모드',
-    role: '프로젝트 심화',
-    score: 91,
-  },
-]
+function formatCompletedDate(value) {
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) return '-'
+
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+
+  return `${year}. ${month}. ${day}`
+}
+
+function formatRelativeDate(value) {
+  const completedDate = new Date(value)
+
+  if (Number.isNaN(completedDate.getTime())) return ''
+
+  const today = new Date()
+  const todayUtc = Date.UTC(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
+  )
+  const completedUtc = Date.UTC(
+    completedDate.getFullYear(),
+    completedDate.getMonth(),
+    completedDate.getDate(),
+  )
+  const dayDifference = Math.floor(
+    (todayUtc - completedUtc) / (24 * 60 * 60 * 1000),
+  )
+
+  if (dayDifference < 0) return ''
+  if (dayDifference === 0) return '오늘'
+  if (dayDifference === 1) return '어제'
+  if (dayDifference <= 30) return `${dayDifference}일 전`
+
+  return ''
+}
 
 function LineIcon({ name }) {
   const paths = {
@@ -211,9 +223,9 @@ function MyPage() {
   const [notionDraft, setNotionDraft] = useState('')
   const [githubDraft, setGithubDraft] = useState('')
   const [githubNotice, setGithubNotice] = useState(null)
-  const [selectedSourceIds, setSelectedSourceIds] = useState([])
 
   const accessToken = useAuthStore((state) => state.accessToken)
+  const user = useAuthStore((state) => state.user)
   const logout = useAuthStore((state) => state.logout)
   const location = useLocation()
   const navigate = useNavigate()
@@ -242,6 +254,11 @@ function MyPage() {
     refetchInterval: (query) =>
       query.state.data?.status === 'running' ? 1500 : false,
   })
+  const interviewHistoryQuery = useQuery({
+    queryKey: INTERVIEW_HISTORY_QUERY_KEY,
+    queryFn: () => getInterviewHistory(1, 10),
+    enabled: queryEnabled,
+  })
 
   const githubStatus = githubStatusQuery.data ?? { connected: false }
   const githubSources = githubSourcesQuery.data ?? EMPTY_GITHUB_SOURCES
@@ -249,6 +266,16 @@ function MyPage() {
   const evidenceStatus = evidenceStatusQuery.data ?? { status: 'idle' }
   const indexPresentation = getIndexPresentation(evidenceStatus.status)
   const indexFailures = evidenceStatus.result?.failures ?? []
+  const historySummary = interviewHistoryQuery.data?.summary
+  const practiceRecords =
+    interviewHistoryQuery.data?.items ?? EMPTY_PRACTICE_RECORDS
+  const totalPracticeCount = historySummary?.total_practice_count ?? 0
+  const averageScore = historySummary?.average_score ?? null
+  const registeredSourceCount = Object.values(
+    evidenceSummary?.source_counts ?? {},
+  ).reduce((total, count) => total + (Number(count) || 0), 0)
+  const userName = user?.name || '사용자'
+  const userInitial = userName.slice(0, 1)
   const canStartInterview = ['success', 'partial_failed'].includes(
     evidenceStatus.status,
   )
@@ -259,19 +286,6 @@ function MyPage() {
       ).sort(([, left], [, right]) => right.confidence - left.confidence),
     [evidenceSummary],
   )
-
-  useEffect(() => {
-    const sourceIds = githubSources.map((source) => source.id)
-
-    setSelectedSourceIds((currentIds) => {
-      const retainedIds = currentIds.filter((id) => sourceIds.includes(id))
-      const newlyAddedIds = sourceIds.filter(
-        (id) => !currentIds.includes(id),
-      )
-
-      return [...retainedIds, ...newlyAddedIds]
-    })
-  }, [githubSources])
 
   useEffect(() => {
     const params = new URLSearchParams(location.search)
@@ -314,16 +328,37 @@ function MyPage() {
     },
   })
 
-  const createSourceMutation = useMutation({
-    mutationFn: createGitHubSource,
-    onSuccess: () => {
-      setGithubDraft('')
+  const startIndexMutation = useMutation({
+    mutationFn: startEvidenceIndex,
+    onSuccess: (status) => {
+      queryClient.setQueryData(GITHUB_QUERY_KEYS.status, status)
       setGithubNotice({
         type: 'success',
-        message: 'GitHub 저장소를 등록했습니다. 분석할 저장소를 선택해주세요.',
+        message: 'GitHub 저장소를 등록하고 분석을 시작했습니다.',
       })
+    },
+    onError: (error) => {
+      if (error.response?.status === 409) {
+        evidenceStatusQuery.refetch()
+      }
+
+      setGithubNotice({
+        type: 'error',
+        message: getRequestErrorMessage(
+          error,
+          'GitHub 저장소 분석을 시작하지 못했습니다.',
+        ),
+      })
+    },
+  })
+
+  const createSourceMutation = useMutation({
+    mutationFn: createGitHubSource,
+    onSuccess: (source) => {
+      setGithubDraft('')
       queryClient.invalidateQueries({ queryKey: GITHUB_QUERY_KEYS.sources })
       queryClient.invalidateQueries({ queryKey: GITHUB_QUERY_KEYS.summary })
+      startIndexMutation.mutate([source.id])
     },
     onError: (error) => {
       setGithubNotice({
@@ -357,34 +392,10 @@ function MyPage() {
     },
   })
 
-  const startIndexMutation = useMutation({
-    mutationFn: startEvidenceIndex,
-    onSuccess: (status) => {
-      queryClient.setQueryData(GITHUB_QUERY_KEYS.status, status)
-      setGithubNotice({
-        type: 'success',
-        message: '선택한 GitHub 저장소 분석을 시작했습니다.',
-      })
-    },
-    onError: (error) => {
-      if (error.response?.status === 409) {
-        evidenceStatusQuery.refetch()
-      }
-
-      setGithubNotice({
-        type: 'error',
-        message: getRequestErrorMessage(
-          error,
-          'GitHub 저장소 분석을 시작하지 못했습니다.',
-        ),
-      })
-    },
-  })
-  const canStartIndex =
-    githubStatus.connected &&
-    selectedSourceIds.length > 0 &&
-    evidenceStatus.status !== 'running' &&
-    !startIndexMutation.isPending
+  const isGithubSubmitPending =
+    createSourceMutation.isPending ||
+    startIndexMutation.isPending ||
+    evidenceStatus.status === 'running'
 
   const handleLogout = () => {
     logout()
@@ -417,27 +428,6 @@ function MyPage() {
     createSourceMutation.mutate(nextUrl)
   }
 
-  const handleSourceSelection = (sourceId) => {
-    setSelectedSourceIds((currentIds) =>
-      currentIds.includes(sourceId)
-        ? currentIds.filter((id) => id !== sourceId)
-        : [...currentIds, sourceId],
-    )
-  }
-
-  const handleStartIndex = () => {
-    if (selectedSourceIds.length === 0) {
-      setGithubNotice({
-        type: 'error',
-        message: '분석할 GitHub 저장소를 하나 이상 선택해주세요.',
-      })
-      return
-    }
-
-    setGithubNotice(null)
-    startIndexMutation.mutate(selectedSourceIds)
-  }
-
   return (
     <div className="my-page">
       <div className="my-page__ambient" aria-hidden="true" />
@@ -458,7 +448,7 @@ function MyPage() {
               <span aria-hidden="true" />
               나의 성장 대시보드
             </p>
-            <h1>안녕하세요, 김민수님!</h1>
+            <h1>안녕하세요, {userName}님!</h1>
             <p>
               학습 자료와 면접 연습 기록을 한곳에서 관리하고 확인해보세요.
             </p>
@@ -472,39 +462,43 @@ function MyPage() {
         <section className="profile-card" aria-label="사용자 정보">
           <div className="profile-card__user">
             <div className="profile-card__avatar" aria-hidden="true">
-              <span>김</span>
+              <span>{userInitial}</span>
             </div>
             <div>
               <div className="profile-card__name-row">
-                <h2>김민수</h2>
-                <span>백엔드 취업 준비생</span>
+                <h2>{userName}</h2>
+                <span>아이티센 교육생</span>
               </div>
-              <p>soyeon.dev@example.com</p>
-              <div className="profile-card__tags">
-                <span>Java</span>
-                <span>Spring Boot</span>
-                <span>MySQL</span>
-              </div>
+              <p>{user?.email ?? ''}</p>
             </div>
           </div>
 
           <dl className="profile-card__stats">
             <div>
               <dt>총 연습</dt>
-              <dd>
-                12<span>회</span>
+              <dd className={interviewHistoryQuery.isPending ? 'is-loading' : ''}>
+                {interviewHistoryQuery.isPending ? '···' : totalPracticeCount}
+                <span>회</span>
               </dd>
             </div>
             <div>
               <dt>등록 자료</dt>
-              <dd>
-                4<span>개</span>
+              <dd className={evidenceSummaryQuery.isPending ? 'is-loading' : ''}>
+                {evidenceSummaryQuery.isPending ? '···' : registeredSourceCount}
+                <span>개</span>
               </dd>
             </div>
             <div>
               <dt>평균 점수</dt>
-              <dd>
-                84<span>점</span>
+              <dd className={interviewHistoryQuery.isPending ? 'is-loading' : ''}>
+                {interviewHistoryQuery.isPending
+                  ? '···'
+                  : averageScore === null
+                    ? '-'
+                    : Math.round(averageScore)}
+                {averageScore !== null && !interviewHistoryQuery.isPending && (
+                  <span>점</span>
+                )}
               </dd>
             </div>
           </dl>
@@ -648,22 +642,27 @@ function MyPage() {
                       type="url"
                       value={githubDraft}
                       disabled={
-                        !githubStatus.connected || createSourceMutation.isPending
+                        !githubStatus.connected || isGithubSubmitPending
                       }
                     />
                     <button
                       type="submit"
                       disabled={
-                        !githubStatus.connected || createSourceMutation.isPending
+                        !githubStatus.connected || isGithubSubmitPending
                       }
                     >
                       <LineIcon name="plus" />
-                      {createSourceMutation.isPending ? '등록 중' : '추가'}
+                      {createSourceMutation.isPending
+                        ? '등록 중'
+                        : startIndexMutation.isPending ||
+                            evidenceStatus.status === 'running'
+                          ? '분석 중'
+                          : '추가'}
                     </button>
                   </div>
                   <p>
                     {githubStatus.connected
-                      ? 'GitHub 저장소 주소를 입력한 뒤 분석할 프로젝트를 선택하세요.'
+                      ? 'GitHub 저장소 주소를 추가하면 분석이 바로 시작됩니다.'
                       : '저장소를 등록하려면 먼저 GitHub 계정을 연결해주세요.'}
                   </p>
                 </form>
@@ -671,7 +670,7 @@ function MyPage() {
                 <div className="github-list">
                   <div className="github-list__label">
                     <span>등록된 프로젝트</span>
-                    <small>{selectedSourceIds.length}개 선택</small>
+                    <small>{githubSources.length}개 등록</small>
                   </div>
                   {githubSourcesQuery.isFetching && !githubSourcesQuery.data && (
                     <p className="github-list__empty">저장소 목록을 불러오고 있어요.</p>
@@ -683,15 +682,6 @@ function MyPage() {
                   )}
                   {githubSources.map((source) => (
                     <div className="github-project" key={source.id}>
-                      <label className="github-project__select">
-                        <input
-                          type="checkbox"
-                          aria-label={`${getRepositoryName(source)} 선택`}
-                          checked={selectedSourceIds.includes(source.id)}
-                          disabled={evidenceStatus.status === 'running'}
-                          onChange={() => handleSourceSelection(source.id)}
-                        />
-                      </label>
                       <span className="github-project__icon" aria-hidden="true">
                         <LineIcon name="code" />
                       </span>
@@ -716,18 +706,6 @@ function MyPage() {
                     </div>
                   ))}
                 </div>
-
-                <button
-                  className="github-index-button"
-                  type="button"
-                  disabled={!canStartIndex}
-                  onClick={handleStartIndex}
-                >
-                  <LineIcon name="refresh" />
-                  {evidenceStatus.status === 'running'
-                    ? 'GitHub 프로젝트 분석 중...'
-                    : '선택한 프로젝트 분석'}
-                </button>
               </article>
             </div>
 
@@ -853,7 +831,9 @@ function MyPage() {
                 <p>이전 면접 결과를 다시 확인하고 성장 과정을 돌아보세요.</p>
               </div>
             </div>
-            <span className="practice-section__total">전체 12회</span>
+            <span className="practice-section__total">
+              전체 {interviewHistoryQuery.isPending ? '···' : totalPracticeCount}회
+            </span>
           </div>
 
           <div className="practice-list">
@@ -863,42 +843,70 @@ function MyPage() {
               <span>종합 점수</span>
               <span>결과 리포트</span>
             </div>
-            {practiceRecords.map((record) => (
-              <Link
-                className="practice-record"
-                key={record.id}
-                to={`/report/${record.id}`}
-              >
-                <span className="practice-record__date">
-                  <strong>{record.date}</strong>
-                  <small>{record.day}</small>
-                </span>
-                <span className="practice-record__mode">
-                  <i
-                    className={
-                      record.mode === '음성 모드'
-                        ? 'practice-record__mode-icon practice-record__mode-icon--voice'
-                        : 'practice-record__mode-icon'
-                    }
-                    aria-hidden="true"
+            {interviewHistoryQuery.isPending ? (
+              <div className="practice-list__state" aria-live="polite">
+                면접 기록을 불러오고 있어요.
+              </div>
+            ) : interviewHistoryQuery.isError ? (
+              <div className="practice-list__state practice-list__state--error">
+                <p>면접 기록을 불러오지 못했습니다.</p>
+                <button
+                  type="button"
+                  onClick={() => interviewHistoryQuery.refetch()}
+                  disabled={interviewHistoryQuery.isFetching}
+                >
+                  {interviewHistoryQuery.isFetching ? '다시 불러오는 중' : '다시 시도'}
+                </button>
+              </div>
+            ) : practiceRecords.length === 0 ? (
+              <div className="practice-list__state">
+                아직 완료한 면접 연습이 없습니다.
+              </div>
+            ) : (
+              practiceRecords.map((record) => {
+                const modePresentation = MODE_PRESENTATION[record.mode] ?? {
+                  label: '면접 모드',
+                  icon: '--',
+                }
+                const relativeDate = formatRelativeDate(record.completed_at)
+
+                return (
+                  <Link
+                    className="practice-record"
+                    key={record.result_id}
+                    to={`/report/${encodeURIComponent(record.result_id)}`}
                   >
-                    {record.mode === '음성 모드' ? 'VO' : 'CH'}
-                  </i>
-                  <span>
-                    <strong>{record.mode}</strong>
-                    <small>{record.role}</small>
-                  </span>
-                </span>
-                <span className="practice-record__score">
-                  <strong>{record.score}</strong>
-                  <small>/ 100</small>
-                </span>
-                <span className="practice-record__report">
-                  리포트 보기
-                  <LineIcon name="arrow" />
-                </span>
-              </Link>
-            ))}
+                    <span className="practice-record__date">
+                      <strong>{formatCompletedDate(record.completed_at)}</strong>
+                      {relativeDate && <small>{relativeDate}</small>}
+                    </span>
+                    <span className="practice-record__mode">
+                      <i
+                        className={
+                          record.mode === 'voice'
+                            ? 'practice-record__mode-icon practice-record__mode-icon--voice'
+                            : 'practice-record__mode-icon'
+                        }
+                        aria-hidden="true"
+                      >
+                        {modePresentation.icon}
+                      </i>
+                      <span>
+                        <strong>{modePresentation.label}</strong>
+                      </span>
+                    </span>
+                    <span className="practice-record__score">
+                      <strong>{Math.round(record.overall_score)}</strong>
+                      <small>/ 100</small>
+                    </span>
+                    <span className="practice-record__report">
+                      리포트 보기
+                      <LineIcon name="arrow" />
+                    </span>
+                  </Link>
+                )
+              })
+            )}
           </div>
         </section>
 

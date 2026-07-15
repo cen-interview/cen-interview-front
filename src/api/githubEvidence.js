@@ -36,7 +36,7 @@ export async function deleteEvidenceSource(sourceId) {
   await apiClient.delete(`/evidence/sources/${sourceId}`)
 }
 
-/** 선택한 GitHub source의 Evidence 인덱싱을 시작한다. */
+/** 지정한 GitHub source의 Evidence 인덱싱을 시작한다. */
 export async function startEvidenceIndex(sourceIds) {
   const response = await apiClient.post('/evidence/index', {
     source_ids: sourceIds,
