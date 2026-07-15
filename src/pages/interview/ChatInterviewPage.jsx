@@ -220,12 +220,15 @@ function ChatInterviewPage() {
       return
     }
 
-    saveChatInterviewReport(session.session_id, session.report)
+    const reportId =
+      session.result_id ?? session.report.result_id ?? session.session_id
+
+    saveChatInterviewReport(reportId, session.report)
 
     navigate(
       ROUTES.REPORT.replace(
         ':interviewId',
-        encodeURIComponent(session.session_id),
+        encodeURIComponent(reportId),
       ),
       {
         replace: true,
