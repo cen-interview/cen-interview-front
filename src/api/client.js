@@ -10,7 +10,7 @@ const axiosInstance = axios.create({
 
 export const apiClient = axios.create({
     baseURL: `${BACKEND_URL}/api`,
-    timeout: 10000,
+    timeout: 15000,
     headers: { "Content-Type": "application/json" },
 });
 
