@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 const TRANSCRIPT_THROTTLE_MS = 500
+const INITIAL_SILENCE_TIMEOUT_MS = 8000
 const CONFIRMATION_RESULT_REASONS = new Set([
   'candidate_wants_to_continue',
   'additional_answer_content',
@@ -66,11 +67,66 @@ function useVoiceTurnController({
   const phaseBeforeReconnectRef = useRef('idle')
   const syncBlockedRef = useRef(false)
   const disconnectedSnapshotDirtyRef = useRef(false)
+  const hasSpokenRef = useRef(false)
+  const initialSilenceTimerRef = useRef()
 
   const updatePhase = useCallback((nextPhase) => {
     phaseRef.current = nextPhase
     setPhase(nextPhase)
   }, [])
+
+  const clearInitialSilenceTimer = useCallback(() => {
+    if (initialSilenceTimerRef.current) {
+      window.clearTimeout(initialSilenceTimerRef.current)
+      initialSilenceTimerRef.current = undefined
+    }
+  }, [])
+
+  const markFirstSpeech = useCallback(() => {
+    if (hasSpokenRef.current) {
+      return
+    }
+
+    hasSpokenRef.current = true
+    clearInitialSilenceTimer()
+
+    if (phaseRef.current === 'initial_silence') {
+      updatePhase('listening')
+    }
+  }, [clearInitialSilenceTimer, updatePhase])
+
+  const startInitialSilenceTimer = useCallback(() => {
+    clearInitialSilenceTimer()
+
+    if (
+      hasSpokenRef.current ||
+      answerTextRef.current ||
+      manualSubmissionRef.current ||
+      modeRef.current !== 'answer'
+    ) {
+      return false
+    }
+
+    const targetQuestionId = questionIdRef.current
+    initialSilenceTimerRef.current = window.setTimeout(() => {
+      initialSilenceTimerRef.current = undefined
+
+      if (
+        targetQuestionId !== questionIdRef.current ||
+        hasSpokenRef.current ||
+        answerTextRef.current ||
+        manualSubmissionRef.current ||
+        modeRef.current !== 'answer' ||
+        !socketReadyRef.current ||
+        !['listening', 'initial_silence'].includes(phaseRef.current)
+      ) {
+        return
+      }
+
+      updatePhase('initial_silence')
+    }, INITIAL_SILENCE_TIMEOUT_MS)
+    return true
+  }, [clearInitialSilenceTimer, updatePhase])
 
   const clearPendingTranscript = useCallback(() => {
     if (throttleTimerRef.current) {
@@ -126,13 +182,21 @@ function useVoiceTurnController({
     phaseBeforeReconnectRef.current = 'idle'
     syncBlockedRef.current = false
     disconnectedSnapshotDirtyRef.current = false
+    hasSpokenRef.current = false
+    clearInitialSilenceTimer()
     setRevision(initialRevision)
     setAnswerText('')
     setSpeechActive(false)
     setConfirmation(null)
     setErrorMessage('')
     updatePhase('idle')
-  }, [clearPendingTranscript, questionId, sessionId, updatePhase])
+  }, [
+    clearInitialSilenceTimer,
+    clearPendingTranscript,
+    questionId,
+    sessionId,
+    updatePhase,
+  ])
 
   useEffect(() => {
     const previousStatus = previousSocketStatusRef.current
@@ -143,6 +207,7 @@ function useVoiceTurnController({
     }
 
     preserveDisconnectedSnapshot(pendingSnapshotRef.current)
+    clearInitialSilenceTimer()
     clearPendingTranscript()
     reconnectPendingRef.current = true
     if (phaseRef.current !== 'reconnecting') {
@@ -176,6 +241,7 @@ function useVoiceTurnController({
     setSpeechActive(false)
     updatePhase('reconnecting')
   }, [
+    clearInitialSilenceTimer,
     clearPendingTranscript,
     pauseListening,
     preserveDisconnectedSnapshot,
@@ -323,6 +389,10 @@ function useVoiceTurnController({
 
   const handleTranscriptSnapshot = useCallback(
     (snapshot) => {
+      if (snapshot.text?.trim()) {
+        markFirstSpeech()
+      }
+
       if (modeRef.current === 'confirmation') {
         handleConfirmationTranscript(snapshot)
         return
@@ -335,7 +405,12 @@ function useVoiceTurnController({
 
       if (
         manualSubmissionRef.current ||
-        !['listening', 'judging', 'barge_in'].includes(phaseRef.current)
+        ![
+          'listening',
+          'initial_silence',
+          'judging',
+          'barge_in',
+        ].includes(phaseRef.current)
       ) {
         return
       }
@@ -365,6 +440,7 @@ function useVoiceTurnController({
       clearPendingTranscript,
       flushPendingTranscript,
       handleConfirmationTranscript,
+      markFirstSpeech,
       preserveDisconnectedSnapshot,
       publishTranscript,
     ],
@@ -372,6 +448,10 @@ function useVoiceTurnController({
 
   const handleSpeechActivityChange = useCallback(
     ({ speechActive: nextSpeechActive }) => {
+      if (nextSpeechActive) {
+        markFirstSpeech()
+      }
+
       speechActiveRef.current = nextSpeechActive
       setSpeechActive(nextSpeechActive)
 
@@ -435,7 +515,13 @@ function useVoiceTurnController({
         updatePhase('listening')
       }
     },
-    [replaceTranscript, sendMessage, stopConfirmation, updatePhase],
+    [
+      markFirstSpeech,
+      replaceTranscript,
+      sendMessage,
+      stopConfirmation,
+      updatePhase,
+    ],
   )
 
   const restoreAnswerAfterConfirmation = useCallback(
@@ -454,6 +540,7 @@ function useVoiceTurnController({
             )
           : activeConfirmation.baseAnswer
 
+      clearInitialSilenceTimer()
       clearPendingTranscript()
       modeRef.current = 'answer'
       confirmationRef.current = null
@@ -473,7 +560,13 @@ function useVoiceTurnController({
       resumeListening()
       updatePhase('listening')
     },
-    [clearPendingTranscript, replaceTranscript, resumeListening, updatePhase],
+    [
+      clearInitialSilenceTimer,
+      clearPendingTranscript,
+      replaceTranscript,
+      resumeListening,
+      updatePhase,
+    ],
   )
 
   const handleConfirmationRequested = useCallback(
@@ -487,6 +580,7 @@ function useVoiceTurnController({
         return
       }
 
+      clearInitialSilenceTimer()
       clearPendingTranscript()
       const nextConfirmation = {
         confirmationId: message.confirmation_id,
@@ -521,6 +615,7 @@ function useVoiceTurnController({
     },
     [
       clearAudioBuffer,
+      clearInitialSilenceTimer,
       clearPendingTranscript,
       pauseListening,
       playConfirmation,
@@ -592,12 +687,16 @@ function useVoiceTurnController({
 
         if (
           message.state === 'listening' &&
-          ['listening', 'judging', 'barge_in'].includes(
+          ['listening', 'initial_silence', 'judging', 'barge_in'].includes(
             phaseBeforeReconnectRef.current,
           )
         ) {
           resumeListening()
           updatePhase('listening')
+
+          if (!hasSpokenRef.current) {
+            startInitialSilenceTimer()
+          }
         } else if (message.state === 'committing') {
           updatePhase('committing')
         } else {
@@ -615,6 +714,7 @@ function useVoiceTurnController({
           if (phaseRef.current !== 'reconnecting') {
             phaseBeforeReconnectRef.current = phaseRef.current
           }
+          clearInitialSilenceTimer()
           pauseListening()
           updatePhase('reconnecting')
           return
@@ -634,6 +734,11 @@ function useVoiceTurnController({
             updatePhase('listening')
             resumeListening()
           }
+        }
+
+        if (!message.recoverable) {
+          clearInitialSilenceTimer()
+          pauseListening()
         }
         return
       }
@@ -678,6 +783,7 @@ function useVoiceTurnController({
       }
 
       if (message.type === 'answer.committed') {
+        clearInitialSilenceTimer()
         clearPendingTranscript()
         automaticallyCommittedQuestionsRef.current.add(message.question_id)
         manualSubmissionRef.current = true
@@ -688,6 +794,7 @@ function useVoiceTurnController({
       }
     },
     [
+      clearInitialSilenceTimer,
       clearPendingTranscript,
       handleConfirmationRequested,
       onSessionCommitted,
@@ -695,6 +802,7 @@ function useVoiceTurnController({
       restoreAnswerAfterConfirmation,
       resumeListening,
       sendMessage,
+      startInitialSilenceTimer,
       stopConfirmation,
       updatePhase,
     ],
@@ -703,35 +811,46 @@ function useVoiceTurnController({
   useEffect(() => subscribe(handleServerMessage), [handleServerMessage, subscribe])
 
   const startQuestion = useCallback(() => {
+    clearInitialSilenceTimer()
     manualSubmissionRef.current = false
     modeRef.current = 'answer'
     syncBlockedRef.current = false
     disconnectedSnapshotDirtyRef.current = false
+    hasSpokenRef.current = false
     setErrorMessage('')
     updatePhase('listening')
-  }, [updatePhase])
+  }, [clearInitialSilenceTimer, updatePhase])
 
   const beginManualSubmission = useCallback(() => {
     if (
       manualSubmissionRef.current ||
       modeRef.current !== 'answer' ||
-      !['listening', 'judging', 'barge_in', 'sync_error'].includes(
-        phaseRef.current,
-      )
+      ![
+        'listening',
+        'initial_silence',
+        'judging',
+        'barge_in',
+        'sync_error',
+      ].includes(phaseRef.current)
     ) {
       return false
     }
 
     manualSubmissionRef.current = true
+    clearInitialSilenceTimer()
     clearPendingTranscript()
     updatePhase('committing')
     return true
-  }, [clearPendingTranscript, updatePhase])
+  }, [clearInitialSilenceTimer, clearPendingTranscript, updatePhase])
 
   const cancelManualSubmission = useCallback(() => {
     manualSubmissionRef.current = false
     updatePhase(syncBlockedRef.current ? 'sync_error' : 'listening')
-  }, [updatePhase])
+
+    if (!hasSpokenRef.current && !syncBlockedRef.current) {
+      startInitialSilenceTimer()
+    }
+  }, [startInitialSilenceTimer, updatePhase])
 
   const canSubmitManualAnswer = useCallback((targetQuestionId) => {
     return !automaticallyCommittedQuestionsRef.current.has(targetQuestionId)
@@ -744,18 +863,20 @@ function useVoiceTurnController({
       }
 
       clearPendingTranscript()
+      clearInitialSilenceTimer()
       manualSubmissionRef.current = true
       updatePhase(response.finished ? 'finished' : 'idle')
     },
-    [clearPendingTranscript, updatePhase],
+    [clearInitialSilenceTimer, clearPendingTranscript, updatePhase],
   )
 
   useEffect(() => {
     return () => {
+      clearInitialSilenceTimer()
       clearPendingTranscript()
       stopConfirmation()
     }
-  }, [clearPendingTranscript, stopConfirmation])
+  }, [clearInitialSilenceTimer, clearPendingTranscript, stopConfirmation])
 
   return {
     phase,
@@ -767,6 +888,8 @@ function useVoiceTurnController({
     handleTranscriptSnapshot,
     handleSpeechActivityChange,
     startQuestion,
+    startInitialSilenceTimer,
+    clearInitialSilenceTimer,
     beginManualSubmission,
     cancelManualSubmission,
     canSubmitManualAnswer,

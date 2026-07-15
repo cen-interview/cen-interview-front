@@ -196,6 +196,7 @@ function VoiceInterviewSession({ accessToken }) {
       ? utteranceQueue
       : [interviewerUtterance]
 
+    voiceTurnControllerRef.current?.clearInitialSilenceTimer()
     pauseListening()
     const playedToEnd = await playQueue(playableQueue)
 
@@ -206,7 +207,11 @@ function VoiceInterviewSession({ accessToken }) {
 
     // 자동 재생 실패 시에도 텍스트를 보고 답변할 수 있도록 마이크를 복구한다.
     voiceTurnControllerRef.current?.startQuestion()
-    resumeListening()
+    const listeningStarted = resumeListening()
+
+    if (listeningStarted) {
+      voiceTurnControllerRef.current?.startInitialSilenceTimer()
+    }
     return playedToEnd
   }, [
     clearAudioBuffer,
@@ -407,6 +412,11 @@ function VoiceInterviewSession({ accessToken }) {
   if (voiceTurnController.phase === 'judging') {
     voiceStatusTitle = '답변 완료 여부 확인 중'
     voiceStatusMessage = '계속 말씀하시면 답변을 이어서 들을게요'
+  }
+
+  if (voiceTurnController.phase === 'initial_silence') {
+    voiceStatusTitle = '답변을 기다리고 있어요'
+    voiceStatusMessage = '천천히 생각한 뒤 말씀해 주세요'
   }
 
   if (voiceTurnController.phase === 'confirmation_tts') {
