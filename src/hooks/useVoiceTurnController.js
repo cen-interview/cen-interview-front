@@ -30,6 +30,7 @@ function useVoiceTurnController({
   subscribe,
   pauseListening,
   resumeListening,
+  startBargeInDetection,
   clearAudioBuffer,
   resetTranscript,
   replaceTranscript,
@@ -59,6 +60,7 @@ function useVoiceTurnController({
   const lastSentSnapshotRef = useRef(null)
   const socketReadyRef = useRef(false)
   const automaticallyCommittedQuestionsRef = useRef(new Set())
+  const cancelledConfirmationIdsRef = useRef(new Set())
 
   const updatePhase = useCallback((nextPhase) => {
     phaseRef.current = nextPhase
@@ -103,6 +105,7 @@ function useVoiceTurnController({
 
   useEffect(() => {
     automaticallyCommittedQuestionsRef.current.clear()
+    cancelledConfirmationIdsRef.current.clear()
   }, [sessionId])
 
   useEffect(() => {
@@ -242,7 +245,7 @@ function useVoiceTurnController({
 
       if (
         manualSubmissionRef.current ||
-        !['listening', 'judging'].includes(phaseRef.current)
+        !['listening', 'judging', 'barge_in'].includes(phaseRef.current)
       ) {
         return
       }
@@ -281,6 +284,45 @@ function useVoiceTurnController({
       speechActiveRef.current = nextSpeechActive
       setSpeechActive(nextSpeechActive)
 
+      const activeConfirmation = confirmationRef.current
+      if (
+        nextSpeechActive &&
+        phaseRef.current === 'confirmation_tts' &&
+        activeConfirmation &&
+        !cancelledConfirmationIdsRef.current.has(
+          activeConfirmation.confirmationId,
+        )
+      ) {
+        cancelledConfirmationIdsRef.current.add(
+          activeConfirmation.confirmationId,
+        )
+        stopConfirmation()
+        modeRef.current = 'answer'
+        confirmationRef.current = null
+        answerTextRef.current = activeConfirmation.baseAnswer
+        speechActiveRef.current = true
+        lastSentSnapshotRef.current = {
+          text: activeConfirmation.baseAnswer,
+          segmentFinal: false,
+          speechActive: true,
+        }
+        setAnswerText(activeConfirmation.baseAnswer)
+        setConfirmation(null)
+        replaceTranscript(activeConfirmation.baseAnswer, {
+          preserveActivity: true,
+        })
+
+        sendMessage({
+          type: 'voice.activity.changed',
+          question_id: questionIdRef.current,
+          revision: activeConfirmation.baseRevision,
+          speech_active: true,
+        })
+        setSpeechActive(true)
+        updatePhase('barge_in')
+        return
+      }
+
       if (
         manualSubmissionRef.current ||
         modeRef.current !== 'answer' ||
@@ -301,7 +343,7 @@ function useVoiceTurnController({
         updatePhase('listening')
       }
     },
-    [sendMessage, updatePhase],
+    [replaceTranscript, sendMessage, stopConfirmation, updatePhase],
   )
 
   const restoreAnswerAfterConfirmation = useCallback(
@@ -347,7 +389,8 @@ function useVoiceTurnController({
       if (
         message.question_id !== questionIdRef.current ||
         message.revision !== revisionRef.current ||
-        manualSubmissionRef.current
+        manualSubmissionRef.current ||
+        cancelledConfirmationIdsRef.current.has(message.confirmation_id)
       ) {
         return
       }
@@ -367,6 +410,8 @@ function useVoiceTurnController({
       setConfirmation(nextConfirmation)
       pauseListening()
       updatePhase('confirmation_tts')
+
+      startBargeInDetection()
 
       await playConfirmation([message.text])
 
@@ -389,6 +434,7 @@ function useVoiceTurnController({
       playConfirmation,
       resetTranscript,
       resumeListening,
+      startBargeInDetection,
       updatePhase,
     ],
   )
@@ -490,7 +536,7 @@ function useVoiceTurnController({
     if (
       manualSubmissionRef.current ||
       modeRef.current !== 'answer' ||
-      !['listening', 'judging'].includes(phaseRef.current)
+      !['listening', 'judging', 'barge_in'].includes(phaseRef.current)
     ) {
       return false
     }

@@ -8,6 +8,12 @@ const SILENCE_THRESHOLD = 0.018
 const SILENCE_DURATION_MS = 800
 // 한 번에 녹음해서 보내는 음성 조각의 최대 길이야. 15초
 const MAX_CHUNK_DURATION_MS = 15000
+// 확인 질문 TTS의 스피커 잔향보다 확실히 큰 소리만 재발화 후보로 본다.
+const BARGE_IN_THRESHOLD = 0.035
+// 확인 질문 재생 직후의 장치 전환음과 잔향을 무시하는 시간이다.
+const BARGE_IN_GRACE_MS = 350
+// 순간 소음이 아니라 실제 발화로 판단하기 위한 최소 연속 시간이다.
+const BARGE_IN_HOLD_MS = 120
 
 /**
  * OpenAI Realtime 전사 연결과 브라우저 발화 구간을 관리한다.
@@ -46,6 +52,8 @@ function useRealtimeTranscription({
   const dataChannelRef = useRef(null)
   const startVolumeMonitoringRef = useRef(() => {})
   const stopVolumeMonitoringRef = useRef(() => {})
+  const setMonitoringModeRef = useRef(() => {})
+  const startBargeInDetectionRef = useRef(() => false)
   const resetTranscriptRef = useRef(() => setTranscript(''))
   const replaceTranscriptRef = useRef(() => {})
   const finalizeTranscriptRef = useRef(async () => '')
@@ -88,9 +96,15 @@ function useRealtimeTranscription({
     }
 
     audioTrackRef.current.enabled = true
+    setMonitoringModeRef.current('answer')
     startVolumeMonitoringRef.current()
     setStatus('listening')
     return true
+  }, [])
+
+  // 확인 질문 TTS 중에는 높은 음량 기준으로 사용자 재발화만 감지한다.
+  const startBargeInDetection = useCallback(() => {
+    return startBargeInDetectionRef.current()
   }, [])
 
   // TTS 또는 이전 답변의 오디오가 Realtime 버퍼에 남지 않도록 비운다.
@@ -112,8 +126,8 @@ function useRealtimeTranscription({
   }, [])
 
   // 확인 응답 수집 후 기존 기본 답변을 화면과 누적 기준에 다시 복원한다.
-  const replaceTranscript = useCallback((text) => {
-    replaceTranscriptRef.current(text)
+  const replaceTranscript = useCallback((text, options) => {
+    replaceTranscriptRef.current(text, options)
   }, [])
 
   // 마이크를 닫고 아직 처리 중인 오디오 구간의 최종 전사를 기다린다.
@@ -141,6 +155,9 @@ function useRealtimeTranscription({
     let lastSpeechAt = 0
     let pendingCommitCount = 0
     let transcriptValue = ''
+    let monitoringMode = 'answer'
+    let bargeInArmedAt = 0
+    let bargeInLoudStartedAt = 0
     const finalizationWaiters = []
 
     // 발화 상태가 실제로 변경된 순간에만 상태와 선택적 callback을 갱신한다.
@@ -191,10 +208,12 @@ function useRealtimeTranscription({
       setActivitySnapshot(null)
     }
 
-    replaceTranscriptRef.current = (text) => {
+    replaceTranscriptRef.current = (text, { preserveActivity = false } = {}) => {
       const normalizedText = text?.trim() ?? ''
 
-      updateSpeechActivity(false)
+      if (!preserveActivity) {
+        updateSpeechActivity(false)
+      }
       segments.clear()
       segmentOrder = 0
       transcriptValue = normalizedText
@@ -305,8 +324,31 @@ function useRealtimeTranscription({
           samples.reduce((sum, sample) => sum + sample * sample, 0) /
           samples.length
         const volume = Math.sqrt(meanSquare)
+        const detectingBargeIn = monitoringMode === 'barge-in'
+        const bargeInVolumeDetected =
+          detectingBargeIn &&
+          now >= bargeInArmedAt &&
+          volume >= BARGE_IN_THRESHOLD
 
-        if (volume >= SILENCE_THRESHOLD) {
+        if (detectingBargeIn) {
+          if (bargeInVolumeDetected) {
+            if (!bargeInLoudStartedAt) {
+              bargeInLoudStartedAt = now
+            }
+
+            if (now - bargeInLoudStartedAt >= BARGE_IN_HOLD_MS) {
+              monitoringMode = 'answer'
+              bufferHasSpeech = true
+              speechStartedAt = bargeInLoudStartedAt
+              lastSpeechAt = now
+              updateSpeechActivity(true)
+            }
+          } else {
+            bargeInLoudStartedAt = 0
+          }
+        }
+
+        if (!detectingBargeIn && volume >= SILENCE_THRESHOLD) {
           if (!bufferHasSpeech) {
             bufferHasSpeech = true
             speechStartedAt = now
@@ -353,6 +395,25 @@ function useRealtimeTranscription({
 
     startVolumeMonitoringRef.current = startVolumeMonitoring
     stopVolumeMonitoringRef.current = stopVolumeMonitoring
+    setMonitoringModeRef.current = (nextMode) => {
+      monitoringMode = nextMode
+      bargeInArmedAt = 0
+      bargeInLoudStartedAt = 0
+    }
+    startBargeInDetectionRef.current = () => {
+      if (!audioTrack || dataChannel?.readyState !== 'open') {
+        return false
+      }
+
+      stopVolumeMonitoring()
+      monitoringMode = 'barge-in'
+      bargeInArmedAt = performance.now() + BARGE_IN_GRACE_MS
+      bargeInLoudStartedAt = 0
+      audioTrack.enabled = true
+      startVolumeMonitoring()
+      setStatus('listening')
+      return true
+    }
     finalizeTranscriptRef.current = async () => {
       if (audioTrack) {
         audioTrack.enabled = false
@@ -439,6 +500,8 @@ function useRealtimeTranscription({
       dataChannelRef.current = null
       startVolumeMonitoringRef.current = () => {}
       stopVolumeMonitoringRef.current = () => {}
+      setMonitoringModeRef.current = () => {}
+      startBargeInDetectionRef.current = () => false
       replaceTranscriptRef.current = () => {}
       finalizeTranscriptRef.current = async () => ''
     }
@@ -632,6 +695,7 @@ function useRealtimeTranscription({
     listening: status === 'listening',
     pauseListening,
     resumeListening,
+    startBargeInDetection,
     clearAudioBuffer,
     resetTranscript,
     replaceTranscript,

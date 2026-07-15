@@ -84,6 +84,7 @@ function VoiceInterviewSession({ accessToken }) {
     error,
     pauseListening,
     resumeListening,
+    startBargeInDetection,
     clearAudioBuffer,
     resetTranscript,
     replaceTranscript,
@@ -128,6 +129,7 @@ function VoiceInterviewSession({ accessToken }) {
     subscribe: subscribeVoiceTurn,
     pauseListening,
     resumeListening,
+    startBargeInDetection,
     clearAudioBuffer,
     resetTranscript,
     replaceTranscript,
@@ -407,6 +409,11 @@ function VoiceInterviewSession({ accessToken }) {
   if (voiceTurnController.phase === 'confirmation_response') {
     voiceStatusTitle = '확인 응답을 듣고 있어요'
     voiceStatusMessage = '답변을 마쳤는지 짧게 말씀해 주세요'
+  }
+
+  if (voiceTurnController.phase === 'barge_in') {
+    voiceStatusTitle = '답변을 계속 듣고 있어요'
+    voiceStatusMessage = '이어서 말씀해 주세요'
   }
 
   if (sessionPhase === 'error' || isRecognitionFailed || isVoiceTurnFailed) {
