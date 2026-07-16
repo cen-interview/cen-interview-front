@@ -659,8 +659,11 @@ function VoiceInterviewSession({ accessToken }) {
     pageEndRef.current?.scrollIntoView({ block: 'end' })
   }, [
     conversationTurns.length,
+    displayedTranscript,
+    isSubmitting,
     session?.question?.question_id,
     session?.transcript?.length,
+    voiceTurnController.phase,
   ])
 
   const handleSessionRetry = async () => {
