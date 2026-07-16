@@ -462,7 +462,7 @@ function ReportPage() {
                 <span>
                   <LineIcon name="star" />
                 </span>
-                면접 결과 요약
+                센! 한마디
               </h2>
               <p>{report.summary}</p>
             </div>
