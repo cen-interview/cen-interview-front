@@ -183,7 +183,7 @@ function useRealtimeTranscription({
     )
   }, [])
 
-  // 선택된 STT 엔진이 준비된 경우에만 마이크 수집을 다시 시작한다.
+  // 선택된 STT 엔진과 실제 캡처 시작이 모두 준비된 경우에만 성공을 반환한다.
   const resumeListening = useCallback(() => {
     if (!audioTrackRef.current || !transcriptionReadyRef.current) {
       return false
@@ -199,7 +199,9 @@ function useRealtimeTranscription({
     if (transcriptionCaptureStarted && transcriptionReadyRef.current) {
       setStatus('listening')
     }
-    return true
+    return Boolean(
+      transcriptionCaptureStarted && transcriptionReadyRef.current,
+    )
   }, [])
 
   // 확인 질문 TTS 중에는 높은 음량 기준으로 사용자 재발화만 감지한다.
