@@ -104,13 +104,37 @@ const mergeReactionTurns = (baseTurns, reactions) => {
     mergedTurns.splice(insertionIndex, 0, reactionTurn)
   })
 
-  const pendingReactionIndex = mergedTurns.findIndex((turn) => {
+  const groupedTurns = []
+
+  for (let index = 0; index < mergedTurns.length; index += 1) {
+    const turn = mergedTurns[index]
+    const nextTurn = mergedTurns[index + 1]
+
+    if (
+      turn.isReaction &&
+      nextTurn?.role === 'interviewer' &&
+      !nextTurn.isReaction
+    ) {
+      groupedTurns.push({
+        ...turn,
+        followupText: nextTurn.text,
+        followupQuestionId: nextTurn.question_id,
+        followupKind: nextTurn.kind,
+      })
+      index += 1
+      continue
+    }
+
+    groupedTurns.push(turn)
+  }
+
+  const pendingReactionIndex = groupedTurns.findIndex((turn) => {
     return turn.isReaction && !turn.streamCompleted
   })
 
   return pendingReactionIndex < 0
-    ? mergedTurns
-    : mergedTurns.slice(0, pendingReactionIndex + 1)
+    ? groupedTurns
+    : groupedTurns.slice(0, pendingReactionIndex + 1)
 }
 
 /**
@@ -287,6 +311,12 @@ function VoiceConversationTurn({
             text={turn.text}
             onComplete={turn.isReaction ? handleStreamComplete : undefined}
           />
+          {turn.followupText && turn.streamCompleted && (
+            <>
+              {'\n\n'}
+              <StreamingInterviewerText text={turn.followupText} />
+            </>
+          )}
         </p>
         {speechErrorMessage && (
           <p className="question-bubble__error" role="alert">
