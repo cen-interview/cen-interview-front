@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { generateInterviewSpeech } from '../api/interview.js'
+import {
+  cancelBrowserSpeech,
+  isBrowserSpeechSupported,
+  prepareBrowserSpeech,
+  speakWithBrowserSpeech,
+} from '../features/interview/browserSpeech.js'
 
 const AUTOPLAY_ERROR_MESSAGE =
   '브라우저에서 자동 재생을 허용하지 않았습니다. 질문 듣기를 눌러주세요.'
@@ -9,12 +15,12 @@ const normalizeUtterances = (utterances) => {
 }
 
 /**
- * 면접관 발화를 미리 합성하고 요청 순서대로 끊김 없이 재생한다.
+ * 면접관 발화를 Web Speech 우선으로 요청 순서대로 끊김 없이 재생한다.
  *
  * playQueue는 기존 재생을 취소하고 새 큐로 교체한다. enqueueAfterCurrent는
- * 현재 음성을 유지한 채 다음 큐의 TTS 요청을 즉시 시작하고, 실제 재생만
- * 앞선 큐가 끝날 때까지 기다린다. 합성된 Blob은 문장별로 캐싱하므로 고정
- * 리액션과 동일 문장을 다시 받을 때 네트워크 요청을 반복하지 않는다.
+ * 현재 음성을 유지한 채 다음 큐를 연결한다. Web Speech를 지원하지 않거나
+ * 실제 합성에 실패한 경우에는 기존 백엔드 TTS를 폴백으로 사용한다. 폴백
+ * 경로에서는 합성된 Blob을 문장별로 캐싱하고 다음 큐의 요청을 선제 생성한다.
  *
  * @returns {{
  *   phase: 'idle' | 'loading' | 'playing' | 'completed' | 'error',
@@ -36,6 +42,8 @@ function useInterviewSpeech() {
   const audioCacheRef = useRef(new Map())
   const requestControllersRef = useRef(new Set())
   const mountedRef = useRef(true)
+  const speechOwnerRef = useRef(Symbol('interview-speech-owner'))
+  const browserSpeechEnabledRef = useRef(isBrowserSpeechSupported())
 
   const releaseAudio = useCallback(() => {
     const audio = audioRef.current
@@ -57,6 +65,7 @@ function useInterviewSpeech() {
     playbackIdRef.current += 1
     pendingPlaybackRef.current?.(false)
     pendingPlaybackRef.current = null
+    cancelBrowserSpeech(speechOwnerRef.current)
     releaseAudio()
     queueTailRef.current = Promise.resolve(false)
   }, [releaseAudio])
@@ -86,11 +95,67 @@ function useInterviewSpeech() {
 
   const prepareQueue = useCallback(
     (utterances) => {
+      const shouldPrefetchFallback = !browserSpeechEnabledRef.current
+
       return normalizeUtterances(utterances).map((utterance) => ({
-        audioBlob: getCachedSpeech(utterance),
+        utterance,
+        audioBlob: shouldPrefetchFallback
+          ? getCachedSpeech(utterance)
+          : null,
       }))
     },
     [getCachedSpeech],
+  )
+
+  const playFallbackSpeech = useCallback(
+    async (preparedSpeech, playbackId) => {
+      const audioBlob = await (
+        preparedSpeech.audioBlob ?? getCachedSpeech(preparedSpeech.utterance)
+      )
+
+      if (playbackId !== playbackIdRef.current) {
+        return false
+      }
+
+      const objectUrl = URL.createObjectURL(audioBlob)
+      const audio = new Audio(objectUrl)
+      objectUrlRef.current = objectUrl
+      audioRef.current = audio
+
+      if (mountedRef.current) {
+        setPhase('playing')
+      }
+
+      const playedToEnd = await new Promise((resolve, reject) => {
+        pendingPlaybackRef.current = resolve
+
+        audio.addEventListener(
+          'ended',
+          () => {
+            pendingPlaybackRef.current = null
+            resolve(true)
+          },
+          { once: true },
+        )
+        audio.addEventListener(
+          'error',
+          () => {
+            pendingPlaybackRef.current = null
+            reject(new Error('면접관 음성을 재생하지 못했습니다.'))
+          },
+          { once: true },
+        )
+
+        audio.play().catch((playError) => {
+          pendingPlaybackRef.current = null
+          reject(playError)
+        })
+      })
+
+      releaseAudio()
+      return playedToEnd
+    },
+    [getCachedSpeech, releaseAudio],
   )
 
   const playPreparedQueue = useCallback(
@@ -116,48 +181,43 @@ function useInterviewSpeech() {
           if (mountedRef.current) {
             setPhase('loading')
           }
-          const audioBlob = await preparedSpeech.audioBlob
+          let playedToEnd
 
-          if (playbackId !== playbackIdRef.current) {
-            return false
-          }
+          if (browserSpeechEnabledRef.current) {
+            try {
+              playedToEnd = await speakWithBrowserSpeech(
+                preparedSpeech.utterance,
+                {
+                  ownerId: speechOwnerRef.current,
+                  onStart: () => {
+                    if (mountedRef.current) {
+                      setPhase('playing')
+                    }
+                  },
+                },
+              )
+            } catch (browserSpeechError) {
+              if (browserSpeechError.name === 'NotAllowedError') {
+                throw browserSpeechError
+              }
 
-          const objectUrl = URL.createObjectURL(audioBlob)
-          const audio = new Audio(objectUrl)
-          objectUrlRef.current = objectUrl
-          audioRef.current = audio
+              browserSpeechEnabledRef.current = false
 
-          if (mountedRef.current) {
-            setPhase('playing')
-          }
+              if (playbackId !== playbackIdRef.current) {
+                return false
+              }
 
-          const playedToEnd = await new Promise((resolve, reject) => {
-            pendingPlaybackRef.current = resolve
-
-            audio.addEventListener(
-              'ended',
-              () => {
-                pendingPlaybackRef.current = null
-                resolve(true)
-              },
-              { once: true },
+              playedToEnd = await playFallbackSpeech(
+                preparedSpeech,
+                playbackId,
+              )
+            }
+          } else {
+            playedToEnd = await playFallbackSpeech(
+              preparedSpeech,
+              playbackId,
             )
-            audio.addEventListener(
-              'error',
-              () => {
-                pendingPlaybackRef.current = null
-                reject(new Error('면접관 음성을 재생하지 못했습니다.'))
-              },
-              { once: true },
-            )
-
-            audio.play().catch((playError) => {
-              pendingPlaybackRef.current = null
-              reject(playError)
-            })
-          })
-
-          releaseAudio()
+          }
 
           if (!playedToEnd || playbackId !== playbackIdRef.current) {
             return false
@@ -187,7 +247,7 @@ function useInterviewSpeech() {
         return false
       }
     },
-    [releaseAudio],
+    [playFallbackSpeech, releaseAudio],
   )
 
   const playQueue = useCallback(
@@ -218,9 +278,21 @@ function useInterviewSpeech() {
   )
 
   const warmCache = useCallback(
-    (utterances) => {
+    async (utterances) => {
+      const normalizedUtterances = normalizeUtterances(utterances)
+
+      if (browserSpeechEnabledRef.current) {
+        const browserSpeechReady = await prepareBrowserSpeech()
+
+        if (browserSpeechReady) {
+          return normalizedUtterances.map(() => true)
+        }
+
+        browserSpeechEnabledRef.current = false
+      }
+
       return Promise.all(
-        normalizeUtterances(utterances).map((utterance) => {
+        normalizedUtterances.map((utterance) => {
           return getCachedSpeech(utterance).then(
             () => true,
             () => false,

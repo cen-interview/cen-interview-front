@@ -467,7 +467,7 @@ function VoiceInterviewSession({ accessToken }) {
       return
     }
 
-    // 고정 리액션을 미리 합성하되, 실패하면 수신 시 일반 TTS 경로로 재시도한다.
+    // Web Speech 음성을 준비하고, 미지원 환경에서는 고정 리액션 TTS를 선제 생성한다.
     void warmSpeechCache(REACTION_PHRASES)
   }, [session?.session_id, warmSpeechCache])
 
