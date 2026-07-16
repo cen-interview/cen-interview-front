@@ -18,6 +18,30 @@ const waveform = [
   10, 19, 27, 17, 12, 22, 39, 48, 30, 17, 10, 15, 24, 16,
 ]
 
+const formatElapsedTime = (totalSeconds) => {
+  const normalizedSeconds = Math.max(0, Math.floor(totalSeconds))
+  const hours = Math.floor(normalizedSeconds / 3600)
+  const minutes = Math.floor((normalizedSeconds % 3600) / 60)
+  const seconds = normalizedSeconds % 60
+  const minuteText = String(minutes).padStart(2, '0')
+  const secondText = String(seconds).padStart(2, '0')
+
+  if (hours > 0) {
+    return `${String(hours).padStart(2, '0')}:${minuteText}:${secondText}`
+  }
+
+  return `${minuteText}:${secondText}`
+}
+
+const formatElapsedDuration = (totalSeconds) => {
+  const normalizedSeconds = Math.max(0, Math.floor(totalSeconds))
+  const hours = Math.floor(normalizedSeconds / 3600)
+  const minutes = Math.floor((normalizedSeconds % 3600) / 60)
+  const seconds = normalizedSeconds % 60
+
+  return `PT${hours ? `${hours}H` : ''}${minutes}M${seconds}S`
+}
+
 const getLastInterviewerTurnIndex = (turns) => {
   for (let index = turns.length - 1; index >= 0; index -= 1) {
     if (turns[index].role === 'interviewer') {
@@ -26,6 +50,41 @@ const getLastInterviewerTurnIndex = (turns) => {
   }
 
   return -1
+}
+
+function VoiceInterviewProgress({ progress, isSubmitting }) {
+  if (!progress) {
+    return null
+  }
+
+  const statusLabel = isSubmitting
+    ? '답변 분석 중'
+    : progress.status === 'completed'
+      ? '면접 완료'
+      : progress.answered_question_count < progress.asked_question_count
+        ? '답변 대기'
+        : '다음 질문 준비 중'
+  const statusModifier = isSubmitting ? 'analyzing' : progress.status
+  const mainQuestion = progress.main_question
+
+  return (
+    <div
+      className="question-bubble__progress"
+      aria-label={`면접 진행 상태: ${statusLabel}, 메인 질문 ${mainQuestion.current}/${mainQuestion.total}`}
+    >
+      <span
+        className={`question-bubble__progress-status question-bubble__progress-status--${statusModifier}`}
+      >
+        {statusLabel}
+      </span>
+      <span className="question-bubble__progress-metric">
+        메인 질문
+        <strong>
+          {mainQuestion.current} / {mainQuestion.total}
+        </strong>
+      </span>
+    </div>
+  )
 }
 
 function VoiceSessionState({ errorMessage, onRetry }) {
@@ -67,7 +126,12 @@ function VoiceSessionState({ errorMessage, onRetry }) {
   )
 }
 
-function VoiceConversationTurn({ turn, speechErrorMessage }) {
+function VoiceConversationTurn({
+  turn,
+  progress,
+  isSubmitting = false,
+  speechErrorMessage,
+}) {
   if (turn.role === 'candidate') {
     return (
       <section className="voice-message voice-message--answer">
@@ -88,7 +152,13 @@ function VoiceConversationTurn({ turn, speechErrorMessage }) {
       </div>
 
       <div className="question-bubble">
-        <p className="question-bubble__name">면접관 센</p>
+        <div className="question-bubble__header">
+          <p className="question-bubble__name">면접관 센</p>
+          <VoiceInterviewProgress
+            progress={progress}
+            isSubmitting={isSubmitting}
+          />
+        </div>
         <p className="question-bubble__text">{turn.text}</p>
         {speechErrorMessage && (
           <p className="question-bubble__error" role="alert">
@@ -102,8 +172,7 @@ function VoiceConversationTurn({ turn, speechErrorMessage }) {
 
 function VoiceInterviewSession({ accessToken }) {
   const navigate = useNavigate()
-  const [answerErrorMessage, setAnswerErrorMessage] = useState('')
-  const [isFinalizing, setIsFinalizing] = useState(false)
+  const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const voiceTurnControllerRef = useRef(null)
   const pageEndRef = useRef(null)
   const handleTranscriptSnapshot = useCallback((snapshot) => {
@@ -118,7 +187,6 @@ function VoiceInterviewSession({ accessToken }) {
     errorMessage: sessionErrorMessage,
     start,
     applySessionResponse,
-    submitAnswer,
     retry,
   } = useVoiceInterview()
   const {
@@ -132,7 +200,6 @@ function VoiceInterviewSession({ accessToken }) {
     clearAudioBuffer,
     resetTranscript,
     replaceTranscript,
-    finalizeTranscript,
   } = useRealtimeTranscription({
     onPermissionGranted: start,
     startListeningOnConnect: false,
@@ -200,6 +267,31 @@ function VoiceInterviewSession({ accessToken }) {
   const sessionTranscript = Array.isArray(session?.transcript)
     ? session.transcript
     : []
+  const sessionStartedAt = sessionTranscript.find(
+    (turn) => turn?.created_at,
+  )?.created_at
+
+  useEffect(() => {
+    if (!session?.session_id) {
+      setElapsedSeconds(0)
+      return undefined
+    }
+
+    const parsedStartedAt = Date.parse(sessionStartedAt)
+    const currentTime = Date.now()
+    const startedAt = Number.isNaN(parsedStartedAt)
+      ? currentTime
+      : Math.min(parsedStartedAt, currentTime)
+    const updateElapsedTime = () => {
+      setElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000))
+    }
+
+    updateElapsedTime()
+    const intervalId = window.setInterval(updateElapsedTime, 1000)
+
+    return () => window.clearInterval(intervalId)
+  }, [session?.session_id, sessionStartedAt])
+
   const conversationTurns = sessionTranscript.length
     ? sessionTranscript
     : [{ role: 'interviewer', text: interviewerUtterance }]
@@ -221,18 +313,7 @@ function VoiceInterviewSession({ accessToken }) {
   const isSpeechBusy = isQuestionSpeechBusy || isConfirmationSpeechBusy
   const isSubmitting =
     sessionPhase === 'submitting' ||
-    isFinalizing ||
     voiceTurnController.phase === 'committing'
-  const controllerLocksInteraction = [
-    'confirmation_tts',
-    'confirmation_response',
-    'committing',
-  ].includes(voiceTurnController.phase)
-  const isInteractionBusy =
-    isSpeechBusy ||
-    isSubmitting ||
-    controllerLocksInteraction ||
-    isVoiceTurnReconnecting
 
   /**
    * 현재 질문의 발화 큐를 순서대로 재생한 뒤 지원자 마이크를 연다.
@@ -335,57 +416,6 @@ function VoiceInterviewSession({ accessToken }) {
   useEffect(() => {
     pageEndRef.current?.scrollIntoView({ block: 'end' })
   }, [session?.question?.question_id, session?.transcript?.length])
-
-  const handleAnswerSubmit = async () => {
-    const submittingQuestionId = session?.question?.question_id
-
-    if (
-      isInteractionBusy ||
-      status !== 'listening' ||
-      !submittingQuestionId ||
-      !voiceTurnController.beginManualSubmission()
-    ) {
-      return
-    }
-
-    setAnswerErrorMessage('')
-    setIsFinalizing(true)
-
-    try {
-      const finalTranscript = await finalizeTranscript()
-
-      // 전사 확정 대기 중 WebSocket 자동 제출이 먼저 끝났다면 중복 HTTP 제출을 막는다.
-      if (!voiceTurnController.canSubmitManualAnswer(submittingQuestionId)) {
-        return
-      }
-
-      if (!finalTranscript) {
-        setAnswerErrorMessage(
-          '인식된 답변이 없습니다. 마이크에 대고 다시 답변해 주세요.',
-        )
-        voiceTurnController.cancelManualSubmission()
-        resumeListening()
-        return
-      }
-
-      const deliverySnapshot =
-        voiceTurnController.createDeliverySnapshot(finalTranscript)
-      const response = await submitAnswer(
-        finalTranscript,
-        deliverySnapshot.metrics,
-      )
-
-      if (response) {
-        voiceTurnController.completeManualSubmission(response)
-
-        if (!response.finished) {
-          reconnectVoiceTurn(response.question?.question_id)
-        }
-      }
-    } finally {
-      setIsFinalizing(false)
-    }
-  }
 
   const handleSessionRetry = async () => {
     if (isVoiceTurnFailed && session && !isRecognitionFailed) {
@@ -559,6 +589,12 @@ function VoiceInterviewSession({ accessToken }) {
         {conversationTurns.map((turn, index) => (
           <VoiceConversationTurn
             turn={turn}
+            progress={
+              index === lastInterviewerTurnIndex ? session?.progress : null
+            }
+            isSubmitting={
+              index === lastInterviewerTurnIndex && isSubmitting
+            }
             speechErrorMessage={
               index === lastInterviewerTurnIndex ? speechErrorMessage : ''
             }
@@ -568,12 +604,7 @@ function VoiceInterviewSession({ accessToken }) {
 
         <section className="live-answer" aria-label="실시간 답변 내용">
           <header className="live-answer__header">
-            <h1>
-              <span className="live-answer__pulse" aria-hidden="true">
-                <i />
-              </span>
-              나의 답변
-            </h1>
+            <h1>나의 답변</h1>
             <p>
               <span className="signal-bars" aria-hidden="true">
                 <i />
@@ -601,43 +632,15 @@ function VoiceInterviewSession({ accessToken }) {
               )}
             </p>
           </div>
-          <footer className="live-answer__footer">
-            <div aria-live="polite">
-              {(answerErrorMessage ||
-                voiceTurnController.errorMessage ||
+          {(voiceTurnController.errorMessage ||
+            voiceTurnErrorMessage ||
+            confirmationSpeechErrorMessage) && (
+            <p className="live-answer__error" role="alert">
+              {voiceTurnController.errorMessage ||
                 voiceTurnErrorMessage ||
-                confirmationSpeechErrorMessage) && (
-                <p className="live-answer__error">
-                  {answerErrorMessage ||
-                    voiceTurnController.errorMessage ||
-                    voiceTurnErrorMessage ||
-                    confirmationSpeechErrorMessage}
-                </p>
-              )}
-            </div>
-            <button
-              type="button"
-              disabled={
-                isVoiceTurnFailed
-                  ? false
-                  : isInteractionBusy || status !== 'listening'
-              }
-              onClick={() => {
-                if (isVoiceTurnFailed) {
-                  reconnectVoiceTurn(session?.question?.question_id)
-                  return
-                }
-
-                void handleAnswerSubmit()
-              }}
-            >
-              {isVoiceTurnFailed
-                ? '다시 연결'
-                : isSubmitting
-                  ? '답변 정리 중...'
-                  : '답변 완료'}
-            </button>
-          </footer>
+                confirmationSpeechErrorMessage}
+            </p>
+          )}
         </section>
       </main>
 
@@ -648,7 +651,9 @@ function VoiceInterviewSession({ accessToken }) {
           </span>
           <div>
             <p>인터뷰 진행 중</p>
-            <time dateTime="PT2M35S">02:35</time>
+            <time dateTime={formatElapsedDuration(elapsedSeconds)}>
+              {formatElapsedTime(elapsedSeconds)}
+            </time>
           </div>
         </div>
 

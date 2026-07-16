@@ -178,6 +178,8 @@ function useVoiceTurnController({
     const initialRevision = 0
 
     clearPendingTranscript()
+    // 새 질문이 활성화되는 즉시 이전 질문의 화면 전사와 내부 발화 조각을 비운다.
+    resetTranscript()
     revisionRef.current = initialRevision
     answerTextRef.current = ''
     speechActiveRef.current = false
@@ -203,6 +205,7 @@ function useVoiceTurnController({
     clearInitialSilenceTimer,
     clearPendingTranscript,
     questionId,
+    resetTranscript,
     sessionId,
     updatePhase,
   ])

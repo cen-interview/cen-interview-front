@@ -49,7 +49,7 @@ function InterviewProgress({ progress, isSubmitting }) {
   return (
     <div
       className="chat-bubble__progress"
-      aria-label={`면접 진행 상태: ${statusLabel}, 메인 질문 ${mainQuestion.current}/${mainQuestion.total}, 답변 ${progress.answered_question_count}/${progress.asked_question_count}`}
+      aria-label={`면접 진행 상태: ${statusLabel}, 메인 질문 ${mainQuestion.current}/${mainQuestion.total}`}
     >
       <span
         className={`chat-bubble__progress-status chat-bubble__progress-status--${statusModifier}`}
@@ -60,13 +60,6 @@ function InterviewProgress({ progress, isSubmitting }) {
         메인 질문
         <strong>
           {mainQuestion.current} / {mainQuestion.total}
-        </strong>
-      </span>
-      <span className="chat-bubble__progress-divider" aria-hidden="true" />
-      <span className="chat-bubble__progress-metric">
-        답변
-        <strong>
-          {progress.answered_question_count} / {progress.asked_question_count}
         </strong>
       </span>
     </div>
