@@ -1,5 +1,9 @@
 import { useCallback, useRef, useState } from 'react'
-import { sendChatEvent, startChatInterview } from '../api/interview.js'
+import {
+  confirmChatRubricSharing,
+  sendChatEvent,
+  startChatInterview,
+} from '../api/interview.js'
 
 const INITIAL_PHASE = 'idle'
 
@@ -19,6 +23,10 @@ const getErrorMessage = (error) => {
     return '진행 중인 면접 세션을 찾을 수 없습니다. 새 면접을 시작해주세요.'
   }
 
+  if (status === 409) {
+    return '현재 면접 상태에서는 이 요청을 처리할 수 없습니다.'
+  }
+
   if (status === 422) {
     return '요청 내용을 처리할 수 없습니다. 잠시 후 다시 시도해주세요.'
   }
@@ -34,21 +42,15 @@ const getErrorMessage = (error) => {
   return '면접 요청을 처리하지 못했습니다. 네트워크 상태를 확인해주세요.'
 }
 
-/**
- * 채팅 면접 세션과 사용자 이벤트 요청 상태를 관리한다.
- *
- * 프론트는 사용자가 실제로 수행한 답변 제출과 종료만 백엔드에 전달한다.
- * 다음 질문 종류, 다음 주제 이동, 자동 종료는 백엔드 응답을 그대로 반영한다.
- *
- * @returns 채팅 세션 상태와 시작, 답변 제출, 종료, 재시도 함수
- */
 export const useChatInterview = () => {
   const [session, setSession] = useState(null)
   const [phase, setPhase] = useState(INITIAL_PHASE)
   const [errorMessage, setErrorMessage] = useState(null)
   const [failedRequest, setFailedRequest] = useState(null)
   const [pendingAnswer, setPendingAnswer] = useState(null)
+
   const requestInFlightRef = useRef(false)
+  const sessionId = session?.session_id
 
   const applySessionResponse = useCallback((response) => {
     setSession(response)
@@ -96,14 +98,18 @@ export const useChatInterview = () => {
 
   const runEvent = useCallback(
     async (request) => {
-      if (requestInFlightRef.current || !session?.session_id) {
+      if (requestInFlightRef.current || !sessionId) {
         return null
       }
 
       requestInFlightRef.current = true
+
       if (request.payload.action === 'submit') {
         setPendingAnswer((currentPendingAnswer) => {
-          if (currentPendingAnswer?.clientEventId === request.clientEventId) {
+          if (
+            currentPendingAnswer?.clientEventId ===
+            request.clientEventId
+          ) {
             return currentPendingAnswer
           }
 
@@ -114,15 +120,21 @@ export const useChatInterview = () => {
           }
         })
       }
-      setPhase(request.payload.action === 'end' ? 'ending' : 'submitting')
+
+      setPhase(
+        request.payload.action === 'end'
+          ? 'ending'
+          : 'submitting',
+      )
       setErrorMessage(null)
 
       try {
         const response = await sendChatEvent(
-          session.session_id,
+          sessionId,
           request.payload,
           request.clientEventId,
         )
+
         const isSuccessful = applySessionResponse(response)
 
         if (isSuccessful) {
@@ -145,7 +157,7 @@ export const useChatInterview = () => {
         requestInFlightRef.current = false
       }
     },
-    [applySessionResponse, session?.session_id],
+    [applySessionResponse, sessionId],
   )
 
   const submitAnswer = useCallback(
@@ -182,6 +194,39 @@ export const useChatInterview = () => {
     })
   }, [runEvent, session?.finished])
 
+  const confirmRubricSharing = useCallback(
+    async (share) => {
+      if (
+        requestInFlightRef.current ||
+        !sessionId
+      ) {
+        return null
+      }
+
+      requestInFlightRef.current = true
+      setPhase('confirming-rubric')
+      setErrorMessage(null)
+
+      try {
+        const response = await confirmChatRubricSharing(
+          sessionId,
+          share,
+        )
+
+        const isSuccessful = applySessionResponse(response)
+
+        return isSuccessful ? response : null
+      } catch (error) {
+        setErrorMessage(getErrorMessage(error))
+        setPhase('error')
+        return null
+      } finally {
+        requestInFlightRef.current = false
+      }
+    },
+    [applySessionResponse, sessionId],
+  )
+
   const retry = useCallback(async () => {
     if (!failedRequest) {
       return null
@@ -203,6 +248,7 @@ export const useChatInterview = () => {
     start,
     submitAnswer,
     end,
+    confirmRubricSharing,
     retry,
   }
 }

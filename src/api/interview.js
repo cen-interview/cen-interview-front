@@ -154,3 +154,17 @@ export const getInterviewResult = async (resultId) => {
 
   return response.data.report
 }
+
+export const confirmChatRubricSharing = async (
+  sessionId,
+  share,
+) => {
+  const encodedSessionId = encodeURIComponent(sessionId)
+
+  const response = await apiClient.post(
+    `/sessions/${encodedSessionId}/rubric-consent`,
+    { share },
+  )
+
+  return response.data
+}

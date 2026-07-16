@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import mascotImage from '../../assets/images/interview-mascot.gif'
 import AppHeader from '../../components/common/AppHeader'
@@ -196,11 +196,38 @@ function ChatInterviewPage() {
     phase,
     errorMessage,
     pendingAnswer,
+    confirmRubricSharing,
     start,
     submitAnswer,
     end,
     retry,
   } = useChatInterview()
+
+  const navigateToReport = useCallback(
+    (completedSession) => {
+      if (!completedSession?.report || !completedSession.session_id) {
+        return
+      }
+
+      const reportId =
+        completedSession.result_id ??
+        completedSession.report.result_id ??
+        completedSession.session_id
+
+      saveChatInterviewReport(reportId, completedSession.report)
+      navigate(
+        ROUTES.REPORT.replace(':interviewId', encodeURIComponent(reportId)),
+        {
+          replace: true,
+          state: {
+            mode: 'chat',
+            report: completedSession.report,
+          },
+        },
+      )
+    },
+    [navigate],
+  )
 
   useEffect(() => {
     if (!accessToken) {
@@ -220,25 +247,15 @@ function ChatInterviewPage() {
       return
     }
 
-    const reportId =
-      session.result_id ?? session.report.result_id ?? session.session_id
+    if (
+      session.rubric_share_status === undefined ||
+      session.rubric_share_status === 'pending'
+    ) {
+      return
+    }
 
-    saveChatInterviewReport(reportId, session.report)
-
-    navigate(
-      ROUTES.REPORT.replace(
-        ':interviewId',
-        encodeURIComponent(reportId),
-      ),
-      {
-        replace: true,
-        state: {
-          mode: 'chat',
-          report: session.report,
-        },
-      },
-    )
-  }, [navigate, session])
+    navigateToReport(session)
+  }, [navigateToReport, session])
 
   useEffect(() => {
     if (!isEndConfirmOpen) {
@@ -316,11 +333,18 @@ function ChatInterviewPage() {
       setIsEndConfirmOpen(false)
     }
   }
+  const handleRubricConsent = (share) => {
+    void confirmRubricSharing(share)
+    navigateToReport(session)
+  }
 
+  const isRubricConsentOpen = Boolean(
+    session?.report && session.rubric_share_status === 'pending',
+  )
   const transcript = session?.transcript ?? []
   const isSubmitting = phase === 'submitting'
   const isEnding = phase === 'ending'
-  const isBusy = isSubmitting || isEnding
+  const isBusy = isSubmitting || isEnding || isRubricConsentOpen
   const displayedTurns = pendingAnswer
     ? [
         ...transcript,
@@ -376,7 +400,7 @@ function ChatInterviewPage() {
         })}
       </main>
 
-      {!session?.finished && (
+      {!session?.finished && !isRubricConsentOpen && (
         <form className="chat-composer" onSubmit={handleSubmit}>
           <div className="chat-composer__row">
             <div className="chat-composer__field">
@@ -451,6 +475,37 @@ function ChatInterviewPage() {
                 onClick={handleConfirmEnd}
               >
                 {isEnding ? '종료 중...' : '종료하기'}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+      {isRubricConsentOpen && (
+        <div className="chat-end-dialog" role="presentation">
+          <section
+            className="chat-end-dialog__panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="rubric-consent-dialog-title"
+          >
+            <h2 id="rubric-consent-dialog-title">
+              이번 답변을 향후 평가 기준 개선에 활용해도 될까요?
+            </h2>
+            <div className="chat-end-dialog__actions">
+              <button
+                type="button"
+                disabled={isEnding}
+                onClick={() => handleRubricConsent(false)}
+              >
+                공유하지 않기
+              </button>
+              <button
+                className="chat-end-dialog__confirm"
+                type="button"
+                disabled={isEnding}
+                onClick={() => handleRubricConsent(true)}
+              >
+                {isEnding ? '처리 중...' : '공유하기'}
               </button>
             </div>
           </section>
