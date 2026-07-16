@@ -20,6 +20,30 @@ const BARGE_IN_GRACE_MS = 350
 const BARGE_IN_HOLD_MS = 120
 
 /**
+ * 현재 브라우저가 모바일 기기에서 실행 중인지 확인한다.
+ *
+ * Chromium의 User-Agent Client Hints가 모바일 여부를 제공하면 우선 사용한다.
+ * 지원하지 않는 브라우저와 iPadOS의 데스크톱 모드에서는 기존 user agent와
+ * 터치 입력 정보를 함께 확인한다.
+ *
+ * @returns {boolean} 모바일 브라우저 환경이면 true
+ */
+const isMobileBrowser = () => {
+  if (typeof navigator === 'undefined') {
+    return false
+  }
+
+  const mobileClientHint = navigator.userAgentData?.mobile === true
+  const mobileUserAgent = /Android|iPhone|iPad|iPod/i.test(
+    navigator.userAgent,
+  )
+  const iPadDesktopMode =
+    /Macintosh/i.test(navigator.userAgent) && navigator.maxTouchPoints > 1
+
+  return mobileClientHint || mobileUserAgent || iPadDesktopMode
+}
+
+/**
  * 이전 문장의 끝과 새 인식 cycle의 시작에 중복된 어절을 제거한다.
  *
  * 브라우저 SpeechRecognition을 중지한 뒤 다시 시작하면 직전 문장의 종결부가
@@ -85,8 +109,9 @@ const removeRepeatedSentenceEnding = (text) => {
  * 화면용 누적 transcript 외에 Voice Turn WebSocket에서 사용할 수 있는 누적
  * 전사 snapshot과 실제 발화 시작·종료 snapshot을 만든다. callback은 Ref로
  * 보관하므로 호출하는 컴포넌트가 다시 렌더링돼도 음성 인식 연결을 재생성하지
- * 않는다. SpeechRecognition이 없거나 실행 중 치명적 오류가 나면 그 시점에만
- * OpenAI Realtime WebRTC 연결을 만든다.
+ * 않는다. 데스크톱에서는 SpeechRecognition을 우선 사용하고, 모바일이거나
+ * SpeechRecognition 실행 중 치명적 오류가 나면 OpenAI Realtime WebRTC
+ * 연결을 만든다.
  *
  * @param {{
  *   onPermissionGranted?: () => Promise<object>,
@@ -223,7 +248,7 @@ function useRealtimeTranscription({
     let animationFrameId
     let recognitionController
     let transcriptionEngine = ''
-    let openAIFallbackPromise = null
+    let openAITranscriptionPromise = null
 
     const segments = new Map()
     let segmentOrder = 0
@@ -430,6 +455,12 @@ function useRealtimeTranscription({
         analyser.fftSize = 1024
         samples = new Float32Array(analyser.fftSize)
         source.connect(analyser)
+      }
+
+      if (audioContext.state === 'suspended') {
+        void audioContext.resume().catch(() => {
+          // 사용자 활성화가 필요한 브라우저에서는 다음 시작 요청 때 다시 시도한다.
+        })
       }
 
       const detectSilence = (now) => {
@@ -670,7 +701,7 @@ function useRealtimeTranscription({
       stopTranscriptionCaptureRef.current = () => {}
       setStatus('connecting')
 
-      // 브라우저 STT가 없거나 실패했을 때만 Realtime 단기 토큰을 발급한다.
+      // 모바일 또는 브라우저 STT 실패로 OpenAI 엔진을 선택하면 단기 토큰을 발급한다.
       const tokenResponse = await apiClient.post(
         '/interview/realtime-transcription/token',
       )
@@ -768,22 +799,22 @@ function useRealtimeTranscription({
       }
     }
 
-    const activateOpenAIFallback = () => {
-      if (openAIFallbackPromise || disposed) {
-        return openAIFallbackPromise
+    const activateOpenAITranscription = () => {
+      if (openAITranscriptionPromise || disposed) {
+        return openAITranscriptionPromise
       }
 
       recognitionController?.destroy()
       recognitionController = null
       transcriptionReadyRef.current = false
 
-      openAIFallbackPromise = startOpenAIRealtimeTranscription().catch(
+      openAITranscriptionPromise = startOpenAIRealtimeTranscription().catch(
         (fallbackError) => {
           handleTranscriptionStartError(fallbackError)
         },
       )
 
-      return openAIFallbackPromise
+      return openAITranscriptionPromise
     }
 
     const startBrowserTranscription = () => {
@@ -791,7 +822,7 @@ function useRealtimeTranscription({
       recognitionController = createBrowserSpeechRecognition({
         onResult: updateBrowserSegment,
         onFatalError: () => {
-          void activateOpenAIFallback()
+          void activateOpenAITranscription()
         },
       })
       startTranscriptionCaptureRef.current = () => {
@@ -858,11 +889,14 @@ function useRealtimeTranscription({
           return
         }
 
-        if (isBrowserSpeechRecognitionSupported()) {
+        const shouldUseBrowserSpeechRecognition =
+          !isMobileBrowser() && isBrowserSpeechRecognitionSupported()
+
+        if (shouldUseBrowserSpeechRecognition) {
           startBrowserTranscription()
         } else {
           listeningRequestedRef.current = startListeningOnConnectRef.current
-          await activateOpenAIFallback()
+          await activateOpenAITranscription()
         }
       } catch (startError) {
         handleTranscriptionStartError(startError)
