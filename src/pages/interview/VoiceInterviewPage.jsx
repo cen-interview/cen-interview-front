@@ -136,6 +136,97 @@ const getLastCandidateTurnIndex = (turns, reaction) => {
   return latestCandidateIndex
 }
 
+/**
+ * 서버 transcript에 아직 없는 로컬 확정 답변을 대화 이력에 합친다.
+ *
+ * 음성 답변 제출이 시작되면 실시간 입력 영역은 숨겨지지만 서버의 최신
+ * transcript는 리액션이나 다음 질문보다 늦게 도착할 수 있다. 제출 순간에
+ * 보존한 답변을 해당 질문 바로 뒤에 임시로 넣고, 같은 질문의 지원자 답변이
+ * 서버 transcript에 이미 있으면 서버 데이터를 우선해 중복 표시하지 않는다.
+ *
+ * @param {Array<{ role: string, question_id?: string, text?: string }>} baseTurns 서버 대화 이력
+ * @param {Array<{ id: string, questionId: string, submissionIndex: number, answerText: string }>} localAnswers 로컬 확정 답변
+ * @returns {Array<object>} 로컬 답변이 보완된 대화 이력
+ */
+const mergeLocalCandidateTurns = (baseTurns, localAnswers) => {
+  const mergedTurns = [...baseTurns]
+  const claimedServerAnswerIndexes = new Set()
+  const localAnswerCountByQuestion = new Map()
+
+  localAnswers.forEach((localAnswer) => {
+    const answerText = localAnswer.answerText?.trim()
+
+    if (!answerText) {
+      return
+    }
+
+    const answerIndexForQuestion =
+      localAnswerCountByQuestion.get(localAnswer.questionId) ?? 0
+    localAnswerCountByQuestion.set(
+      localAnswer.questionId,
+      answerIndexForQuestion + 1,
+    )
+
+    const serverAnswerIndex = baseTurns.findIndex((turn, index) => {
+      if (claimedServerAnswerIndexes.has(index) || turn.role !== 'candidate') {
+        return false
+      }
+
+      const questionMatches =
+        !turn.question_id || turn.question_id === localAnswer.questionId
+
+      return questionMatches && turn.text?.trim() === answerText
+    })
+
+    if (serverAnswerIndex >= 0) {
+      claimedServerAnswerIndexes.add(serverAnswerIndex)
+      return
+    }
+
+    const matchingQuestionIndexes = []
+
+    mergedTurns.forEach((turn, index) => {
+      if (turn.role !== 'candidate') {
+        if (
+          turn.role === 'interviewer' &&
+          turn.question_id === localAnswer.questionId
+        ) {
+          matchingQuestionIndexes.push(index)
+        }
+      }
+    })
+    const questionIndex =
+      matchingQuestionIndexes[answerIndexForQuestion] ??
+      matchingQuestionIndexes.at(-1) ??
+      -1
+
+    const candidateTurn = {
+      role: 'candidate',
+      text: answerText,
+      question_id: localAnswer.questionId,
+      client_id: localAnswer.id,
+    }
+
+    if (questionIndex < 0) {
+      mergedTurns.push(candidateTurn)
+      return
+    }
+
+    let insertionIndex = questionIndex + 1
+
+    while (
+      mergedTurns[insertionIndex]?.role === 'candidate' &&
+      mergedTurns[insertionIndex]?.question_id === localAnswer.questionId
+    ) {
+      insertionIndex += 1
+    }
+
+    mergedTurns.splice(insertionIndex, 0, candidateTurn)
+  })
+
+  return mergedTurns
+}
+
 const mergeReactionTurns = (baseTurns, reactions) => {
   const mergedTurns = [...baseTurns]
 
@@ -393,6 +484,7 @@ function VoiceInterviewSession({ accessToken }) {
   const navigate = useNavigate()
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [reactionTurns, setReactionTurns] = useState([])
+  const [localCandidateTurns, setLocalCandidateTurns] = useState([])
   const [displayedSessionTurns, setDisplayedSessionTurns] = useState([])
   const voiceTurnControllerRef = useRef(null)
   const pageEndRef = useRef(null)
@@ -444,8 +536,68 @@ function VoiceInterviewSession({ accessToken }) {
     playQueue: playConfirmation,
     stop: stopConfirmation,
   } = useInterviewSpeech()
+  const recordLocalCandidateTurn = useCallback(
+    (
+      questionId,
+      revision,
+      submissionIndex,
+      answerText,
+      candidateSessionId = session?.session_id,
+    ) => {
+      const normalizedAnswer = answerText?.trim()
+
+      if (
+        !candidateSessionId ||
+        !questionId ||
+        revision === undefined ||
+        revision === null ||
+        submissionIndex === undefined ||
+        submissionIndex === null ||
+        !normalizedAnswer
+      ) {
+        return
+      }
+
+      setLocalCandidateTurns((currentTurns) => {
+        const existingIndex = currentTurns.findIndex((turn) => {
+          return (
+            turn.sessionId === candidateSessionId &&
+            turn.submissionIndex === submissionIndex
+          )
+        })
+        const nextTurn = {
+          id: `answer-${candidateSessionId}-${submissionIndex}`,
+          sessionId: candidateSessionId,
+          questionId,
+          revision,
+          submissionIndex,
+          answerText: normalizedAnswer,
+        }
+
+        if (existingIndex < 0) {
+          return [...currentTurns, nextTurn]
+        }
+
+        if (currentTurns[existingIndex].answerText === normalizedAnswer) {
+          return currentTurns
+        }
+
+        return currentTurns.map((turn, index) => {
+          return index === existingIndex ? nextTurn : turn
+        })
+      })
+    },
+    [session?.session_id],
+  )
   const handleAnswerReaction = useCallback(
     (message) => {
+      const answerText = message.answer_text?.trim() || ''
+      recordLocalCandidateTurn(
+        message.question_id,
+        message.revision,
+        message.submission_index,
+        answerText,
+      )
       reactionSequenceRef.current += 1
       setReactionTurns((currentTurns) => [
         ...currentTurns,
@@ -454,13 +606,13 @@ function VoiceInterviewSession({ accessToken }) {
           questionId: message.question_id,
           revision: message.revision,
           text: message.text,
-          answerText: message.answer_text?.trim() || '',
+          answerText,
           streamCompleted: false,
         },
       ])
       return playQueue([message.text])
     },
-    [playQueue],
+    [playQueue, recordLocalCandidateTurn],
   )
   const handleReactionStreamComplete = useCallback((reactionId) => {
     setReactionTurns((currentTurns) => {
@@ -471,6 +623,19 @@ function VoiceInterviewSession({ accessToken }) {
       })
     })
   }, [])
+  const handleSessionCommitted = useCallback(
+    (nextSession, committedAnswer) => {
+      recordLocalCandidateTurn(
+        committedAnswer?.questionId,
+        committedAnswer?.revision,
+        committedAnswer?.submissionIndex,
+        committedAnswer?.answerText,
+        nextSession?.session_id,
+      )
+      applySessionResponse(nextSession)
+    },
+    [applySessionResponse, recordLocalCandidateTurn],
+  )
   const {
     status: voiceTurnStatus,
     errorMessage: voiceTurnErrorMessage,
@@ -501,7 +666,7 @@ function VoiceInterviewSession({ accessToken }) {
     playConfirmation,
     stopConfirmation,
     playAnswerReaction: handleAnswerReaction,
-    onSessionCommitted: applySessionResponse,
+    onSessionCommitted: handleSessionCommitted,
   })
   voiceTurnControllerRef.current = voiceTurnController
   const lastAutoPlayedQuestionRef = useRef('')
@@ -598,8 +763,14 @@ function VoiceInterviewSession({ accessToken }) {
           question_id: session?.question?.question_id,
         },
       ]
-  const conversationTurns = mergeReactionTurns(
+  const baseConversationTurnsWithLocalAnswers = mergeLocalCandidateTurns(
     baseConversationTurns,
+    localCandidateTurns.filter((turn) => {
+      return turn.sessionId === session?.session_id
+    }),
+  )
+  const conversationTurns = mergeReactionTurns(
+    baseConversationTurnsWithLocalAnswers,
     reactionTurns,
   )
   const lastInterviewerTurnIndex =
@@ -689,9 +860,13 @@ function VoiceInterviewSession({ accessToken }) {
       return
     }
 
-    const questionKey = `${session.session_id}:${
-      session.question?.question_id ?? interviewerUtterance
-    }`
+    const questionKey = [
+      session.session_id,
+      session.question?.question_id ?? 'none',
+      session.turn_type ?? 'question',
+      session.transcript?.length ?? 0,
+      interviewerUtterance,
+    ].join(':')
 
     if (lastAutoPlayedQuestionRef.current === questionKey) {
       return

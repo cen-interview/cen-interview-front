@@ -65,6 +65,8 @@ function useVoiceTurnController({
   const automaticallyCommittedQuestionsRef = useRef(new Set())
   const playedReactionQuestionsRef = useRef(new Set())
   const cancelledConfirmationIdsRef = useRef(new Set())
+  const submissionSequenceRef = useRef(0)
+  const activeSubmissionRef = useRef(null)
   const previousSocketStatusRef = useRef(socketStatus)
   const reconnectPendingRef = useRef(false)
   const phaseBeforeReconnectRef = useRef('idle')
@@ -271,7 +273,10 @@ function useVoiceTurnController({
 
   useEffect(() => {
     automaticallyCommittedQuestionsRef.current.clear()
+    playedReactionQuestionsRef.current.clear()
     cancelledConfirmationIdsRef.current.clear()
+    submissionSequenceRef.current = 0
+    activeSubmissionRef.current = null
   }, [sessionId])
 
   useEffect(() => {
@@ -870,6 +875,13 @@ function useVoiceTurnController({
         }
 
         playedReactionQuestionsRef.current.add(message.question_id)
+        submissionSequenceRef.current += 1
+        const submissionIndex = submissionSequenceRef.current
+        activeSubmissionRef.current = {
+          questionId: message.question_id,
+          revision: message.revision,
+          submissionIndex,
+        }
         clearInitialSilenceTimer()
         clearPendingTranscript()
         deliveryMetricsTrackerRef.current.suspend()
@@ -879,6 +891,7 @@ function useVoiceTurnController({
         updatePhase('committing')
         void playAnswerReaction({
           ...message,
+          submission_index: submissionIndex,
           answer_text: answerTextRef.current,
         })
         return
@@ -920,6 +933,20 @@ function useVoiceTurnController({
       }
 
       if (message.type === 'answer.committed') {
+        const activeSubmission = activeSubmissionRef.current
+        let submissionIndex
+
+        if (
+          activeSubmission?.questionId === message.question_id &&
+          activeSubmission?.revision === message.revision
+        ) {
+          submissionIndex = activeSubmission.submissionIndex
+        } else {
+          submissionSequenceRef.current += 1
+          submissionIndex = submissionSequenceRef.current
+        }
+
+        activeSubmissionRef.current = null
         clearInitialSilenceTimer()
         clearPendingTranscript()
         deliveryMetricsTrackerRef.current.suspend()
@@ -928,7 +955,12 @@ function useVoiceTurnController({
         pauseListening()
         stopConfirmation()
         updatePhase('committing')
-        onSessionCommitted(message.session)
+        onSessionCommitted(message.session, {
+          questionId: message.question_id,
+          revision: message.revision,
+          submissionIndex,
+          answerText: answerTextRef.current,
+        })
       }
     },
     [
@@ -951,15 +983,34 @@ function useVoiceTurnController({
 
   const startQuestion = useCallback(() => {
     clearInitialSilenceTimer()
+    clearPendingTranscript()
+    resetTranscript()
+    revisionRef.current = 0
+    answerTextRef.current = ''
+    speechActiveRef.current = false
     manualSubmissionRef.current = false
     modeRef.current = 'answer'
+    confirmationRef.current = null
+    lastSentAtRef.current = 0
+    lastSentSnapshotRef.current = null
     syncBlockedRef.current = false
     disconnectedSnapshotDirtyRef.current = false
     hasSpokenRef.current = false
+    automaticallyCommittedQuestionsRef.current.delete(questionIdRef.current)
+    playedReactionQuestionsRef.current.delete(questionIdRef.current)
     deliveryMetricsTrackerRef.current.reset(questionIdRef.current)
+    setRevision(0)
+    setAnswerText('')
+    setSpeechActive(false)
+    setConfirmation(null)
     setErrorMessage('')
     updatePhase('listening')
-  }, [clearInitialSilenceTimer, updatePhase])
+  }, [
+    clearInitialSilenceTimer,
+    clearPendingTranscript,
+    resetTranscript,
+    updatePhase,
+  ])
 
   const beginManualSubmission = useCallback(() => {
     if (
