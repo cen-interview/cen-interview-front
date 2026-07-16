@@ -60,6 +60,82 @@ const getLastInterviewerTurnIndex = (turns) => {
   return -1
 }
 
+/**
+ * 대화 turn의 출처별 React key를 만든다.
+ *
+ * 리액션, 아직 서버 transcript에 반영되지 않은 로컬 답변, 서버가 확정한
+ * transcript가 서로 같은 식별자를 사용하지 않게 분리한다. 새 질문 응답이
+ * 도착했을 때 기존 리액션 말풍선을 재사용하지 않고 새 말풍선을 생성하기
+ * 위한 렌더링 식별자다.
+ *
+ * @param {{
+ *   role: string,
+ *   isReaction?: boolean,
+ *   client_id?: string,
+ *   question_id?: string,
+ *   created_at?: string
+ * }} turn 대화 turn
+ * @param {number} index 대화 이력 내 위치
+ * @returns {string} 출처가 구분된 React key
+ */
+const getConversationTurnKey = (turn, index) => {
+  if (turn.isReaction) {
+    return `reaction-${turn.client_id ?? index}`
+  }
+
+  if (turn.client_id) {
+    return `client-${turn.client_id}`
+  }
+
+  return [
+    'transcript',
+    turn.role,
+    turn.question_id ?? 'none',
+    turn.created_at ?? index,
+    index,
+  ].join('-')
+}
+
+/**
+ * 리액션이 대상으로 삼는 가장 최근 지원자 답변의 위치를 찾는다.
+ *
+ * 같은 질문 ID의 답변이 대화 이력에 둘 이상 남아 있을 수 있으므로 앞에서
+ * 검색하면 새 리액션이 과거 면접관 말풍선에 합쳐진다. 방금 확정된 답변과
+ * 연결되도록 대화 이력의 끝에서부터 검색한다.
+ *
+ * 답변 원문이 있으면 같은 질문 ID 중에서도 원문이 일치하는 turn을 우선해,
+ * 이전 리액션까지 모두 마지막 답변으로 몰리지 않게 한다.
+ *
+ * @param {Array<{ role: string, question_id?: string, text?: string }>} turns 대화 이력
+ * @param {{ questionId: string, answerText?: string }} reaction 리액션 정보
+ * @returns {number} 가장 최근 지원자 답변의 인덱스. 없으면 -1
+ */
+const getLastCandidateTurnIndex = (turns, reaction) => {
+  const answerText = reaction.answerText?.trim()
+  let latestCandidateIndex = -1
+
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index]
+
+    if (
+      turn.role !== 'candidate' ||
+      turn.question_id !== reaction.questionId
+    ) {
+      continue
+    }
+
+    if (latestCandidateIndex < 0) {
+      latestCandidateIndex = index
+    }
+
+    if (answerText && turn.text?.trim() === answerText) {
+      return index
+    }
+  }
+
+  return latestCandidateIndex
+}
+
 const mergeReactionTurns = (baseTurns, reactions) => {
   const mergedTurns = [...baseTurns]
 
@@ -72,12 +148,7 @@ const mergeReactionTurns = (baseTurns, reactions) => {
       isReaction: true,
       streamCompleted: reaction.streamCompleted,
     }
-    const candidateIndex = mergedTurns.findIndex((turn) => {
-      return (
-        turn.role === 'candidate' &&
-        turn.question_id === reaction.questionId
-      )
-    })
+    const candidateIndex = getLastCandidateTurnIndex(mergedTurns, reaction)
 
     if (candidateIndex < 0) {
       if (reaction.answerText) {
@@ -104,37 +175,13 @@ const mergeReactionTurns = (baseTurns, reactions) => {
     mergedTurns.splice(insertionIndex, 0, reactionTurn)
   })
 
-  const groupedTurns = []
-
-  for (let index = 0; index < mergedTurns.length; index += 1) {
-    const turn = mergedTurns[index]
-    const nextTurn = mergedTurns[index + 1]
-
-    if (
-      turn.isReaction &&
-      nextTurn?.role === 'interviewer' &&
-      !nextTurn.isReaction
-    ) {
-      groupedTurns.push({
-        ...turn,
-        followupText: nextTurn.text,
-        followupQuestionId: nextTurn.question_id,
-        followupKind: nextTurn.kind,
-      })
-      index += 1
-      continue
-    }
-
-    groupedTurns.push(turn)
-  }
-
-  const pendingReactionIndex = groupedTurns.findIndex((turn) => {
+  const pendingReactionIndex = mergedTurns.findIndex((turn) => {
     return turn.isReaction && !turn.streamCompleted
   })
 
   return pendingReactionIndex < 0
-    ? groupedTurns
-    : groupedTurns.slice(0, pendingReactionIndex + 1)
+    ? mergedTurns
+    : mergedTurns.slice(0, pendingReactionIndex + 1)
 }
 
 /**
@@ -192,7 +239,12 @@ function StreamingInterviewerText({ text, onComplete }) {
   )
 }
 
-function VoiceInterviewProgress({ progress, isSubmitting }) {
+function VoiceInterviewProgress({
+  progress,
+  isSubmitting,
+  questionKind,
+  parentQuestionId,
+}) {
   if (!progress) {
     return null
   }
@@ -206,11 +258,16 @@ function VoiceInterviewProgress({ progress, isSubmitting }) {
         : '다음 질문 준비 중'
   const statusModifier = isSubmitting ? 'analyzing' : progress.status
   const mainQuestion = progress.main_question
+  const isFollowUp = Boolean(parentQuestionId) ||
+    (Boolean(questionKind) && questionKind !== 'main')
+  const questionProgressLabel = isFollowUp
+    ? '꼬리질문'
+    : `메인 질문 ${mainQuestion.current}/${mainQuestion.total}`
 
   return (
     <div
       className="question-bubble__progress"
-      aria-label={`면접 진행 상태: ${statusLabel}, 메인 질문 ${mainQuestion.current}/${mainQuestion.total}`}
+      aria-label={`면접 진행 상태: ${statusLabel}, ${questionProgressLabel}`}
     >
       <span
         className={`question-bubble__progress-status question-bubble__progress-status--${statusModifier}`}
@@ -218,10 +275,16 @@ function VoiceInterviewProgress({ progress, isSubmitting }) {
         {statusLabel}
       </span>
       <span className="question-bubble__progress-metric">
-        메인 질문
-        <strong>
-          {mainQuestion.current} / {mainQuestion.total}
-        </strong>
+        {isFollowUp ? (
+          '꼬리질문'
+        ) : (
+          <>
+            메인 질문
+            <strong>
+              {mainQuestion.current} / {mainQuestion.total}
+            </strong>
+          </>
+        )}
       </span>
     </div>
   )
@@ -270,6 +333,8 @@ function VoiceConversationTurn({
   turn,
   progress,
   isSubmitting = false,
+  questionKind,
+  parentQuestionId,
   speechErrorMessage,
   onStreamComplete,
 }) {
@@ -304,6 +369,8 @@ function VoiceConversationTurn({
           <VoiceInterviewProgress
             progress={progress}
             isSubmitting={isSubmitting}
+            questionKind={questionKind}
+            parentQuestionId={parentQuestionId}
           />
         </div>
         <p className="question-bubble__text" aria-live="polite">
@@ -311,12 +378,6 @@ function VoiceConversationTurn({
             text={turn.text}
             onComplete={turn.isReaction ? handleStreamComplete : undefined}
           />
-          {turn.followupText && turn.streamCompleted && (
-            <>
-              {'\n\n'}
-              <StreamingInterviewerText text={turn.followupText} />
-            </>
-          )}
         </p>
         {speechErrorMessage && (
           <p className="question-bubble__error" role="alert">
@@ -332,10 +393,12 @@ function VoiceInterviewSession({ accessToken }) {
   const navigate = useNavigate()
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [reactionTurns, setReactionTurns] = useState([])
+  const [displayedSessionTurns, setDisplayedSessionTurns] = useState([])
   const voiceTurnControllerRef = useRef(null)
   const pageEndRef = useRef(null)
   const finishedPlaybackRef = useRef(null)
   const reactionSequenceRef = useRef(0)
+  const displayedSessionIdRef = useRef(null)
   const handleTranscriptSnapshot = useCallback((snapshot) => {
     voiceTurnControllerRef.current?.handleTranscriptSnapshot(snapshot)
   }, [])
@@ -455,12 +518,46 @@ function VoiceInterviewSession({ accessToken }) {
     voiceTurnReadyState?.questionId === session?.question?.question_id
   const interviewerUtterance =
     session?.last_utterance || session?.question?.text || ''
-  const sessionTranscript = Array.isArray(session?.transcript)
+  const incomingSessionTurns = Array.isArray(session?.transcript)
     ? session.transcript
     : []
+  const sessionTranscript =
+    displayedSessionIdRef.current === session?.session_id &&
+    displayedSessionTurns.length
+      ? displayedSessionTurns
+      : incomingSessionTurns
   const sessionStartedAt = sessionTranscript.find(
     (turn) => turn?.created_at,
   )?.created_at
+
+  useEffect(() => {
+    const sessionId = session?.session_id ?? null
+    const latestSessionTurns = Array.isArray(session?.transcript)
+      ? session.transcript
+      : []
+    const isNewSession = displayedSessionIdRef.current !== sessionId
+    displayedSessionIdRef.current = sessionId
+
+    setDisplayedSessionTurns((currentTurns) => {
+      if (!sessionId) {
+        return currentTurns.length ? [] : currentTurns
+      }
+
+      if (isNewSession) {
+        return latestSessionTurns.map((turn) => ({ ...turn }))
+      }
+
+      if (latestSessionTurns.length <= currentTurns.length) {
+        return currentTurns
+      }
+
+      const appendedTurns = latestSessionTurns
+        .slice(currentTurns.length)
+        .map((turn) => ({ ...turn }))
+
+      return [...currentTurns, ...appendedTurns]
+    })
+  }, [session?.session_id, session?.transcript])
 
   useEffect(() => {
     if (!session?.session_id) {
@@ -835,22 +932,29 @@ function VoiceInterviewSession({ accessToken }) {
         className="voice-interview__main"
         aria-label="음성 면접 대화"
       >
-        {conversationTurns.map((turn, index) => (
-          <VoiceConversationTurn
-            turn={turn}
-            progress={
-              index === lastInterviewerTurnIndex ? session?.progress : null
-            }
-            isSubmitting={
-              index === lastInterviewerTurnIndex && isSubmitting
-            }
-            speechErrorMessage={
-              index === lastInterviewerTurnIndex ? speechErrorMessage : ''
-            }
-            onStreamComplete={handleReactionStreamComplete}
-            key={`${turn.role}-${turn.client_id ?? turn.created_at ?? turn.question_id ?? index}`}
-          />
-        ))}
+        {conversationTurns.map((turn, index) => {
+          const isCurrentInterviewerTurn = index === lastInterviewerTurnIndex
+          const currentQuestion = isCurrentInterviewerTurn
+            ? session?.question
+            : null
+
+          return (
+            <VoiceConversationTurn
+              turn={turn}
+              progress={isCurrentInterviewerTurn ? session?.progress : null}
+              questionKind={currentQuestion?.kind ?? turn.kind}
+              parentQuestionId={
+                currentQuestion?.parent_question_id ?? turn.parent_question_id
+              }
+              isSubmitting={isCurrentInterviewerTurn && isSubmitting}
+              speechErrorMessage={
+                isCurrentInterviewerTurn ? speechErrorMessage : ''
+              }
+              onStreamComplete={handleReactionStreamComplete}
+              key={getConversationTurnKey(turn, index)}
+            />
+          )
+        })}
 
         <section
           className="live-answer"

@@ -44,7 +44,7 @@ export const isBrowserSpeechRecognitionSupported = () => {
  * 도착할 때까지 기다린다.
  *
  * @param {{
- *   onResult: (result: { itemId: string, transcript: string, isFinal: boolean }) => void,
+ *   onResult: (result: { itemId: string, cycle: number, transcript: string, isFinal: boolean }) => void,
  *   onFatalError: (error: Error) => void
  * }} callbacks 전사 결과와 폴백이 필요한 오류 callback
  * @returns {{
@@ -162,6 +162,7 @@ export const createBrowserSpeechRecognition = ({
 
       lastResult = {
         itemId: `browser-${cycle}-${index}`,
+        cycle,
         transcript,
         isFinal: result.isFinal,
       }

@@ -20,6 +20,66 @@ const BARGE_IN_GRACE_MS = 350
 const BARGE_IN_HOLD_MS = 120
 
 /**
+ * 이전 문장의 끝과 새 인식 cycle의 시작에 중복된 어절을 제거한다.
+ *
+ * 브라우저 SpeechRecognition을 중지한 뒤 다시 시작하면 직전 문장의 종결부가
+ * 새 cycle의 첫 결과에 다시 포함될 수 있다. 글자 단위가 아니라 공백으로
+ * 구분한 어절 단위로만 비교해 우연히 같은 일부 글자가 삭제되지 않게 한다.
+ *
+ * @param {string} previousText 새 cycle이 시작되기 전까지 누적된 문장
+ * @param {string} currentText 새 cycle에서 받은 첫 segment 문장
+ * @returns {string} 앞부분의 중복 어절을 제거한 새 segment 문장
+ */
+const removeLeadingWordOverlap = (previousText, currentText) => {
+  const previousWords = previousText.trim().split(/\s+/).filter(Boolean)
+  const currentWords = currentText.trim().split(/\s+/).filter(Boolean)
+  const maxOverlap = Math.min(previousWords.length, currentWords.length)
+
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    const previousStart = previousWords.length - overlap
+    const hasSameBoundary = currentWords
+      .slice(0, overlap)
+      .every((word, index) => word === previousWords[previousStart + index])
+
+    if (hasSameBoundary) {
+      return currentWords.slice(overlap).join(' ')
+    }
+  }
+
+  return currentWords.join(' ')
+}
+
+/**
+ * 문장 끝에서 STT가 연속으로 반환한 동일한 종결 어절을 하나로 축약한다.
+ *
+ * 일반 단어 반복은 사용자 발화일 수 있으므로 유지한다. 동일한 마지막 두 어절이
+ * 모두 같은 내용이고 해당 어절이 "-니다", "-요", "-죠" 형태로 끝날 때만
+ * 뒤쪽 어절을 제거한다.
+ *
+ * @param {string} text 화면과 서버에 전달할 누적 전사 문장
+ * @returns {string} 중복된 종결 어절을 제거한 문장
+ */
+const removeRepeatedSentenceEnding = (text) => {
+  const words = text.trim().split(/\s+/).filter(Boolean)
+  const normalizeWord = (word) => word.replace(/[.!?。！？]+$/u, '')
+
+  while (words.length >= 2) {
+    const previousWord = normalizeWord(words.at(-2))
+    const lastWord = normalizeWord(words.at(-1))
+    const isRepeatedEnding =
+      previousWord === lastWord && /(?:니다|요|죠)$/u.test(lastWord)
+
+    if (!isRepeatedEnding) {
+      break
+    }
+
+    words.pop()
+  }
+
+  return words.join(' ')
+}
+
+/**
  * 브라우저 우선 STT와 OpenAI Realtime 폴백, 발화 구간을 관리한다.
  *
  * 화면용 누적 transcript 외에 Voice Turn WebSocket에서 사용할 수 있는 누적
@@ -249,13 +309,19 @@ function useRealtimeTranscription({
       setActivitySnapshot(null)
     }
 
-    // 발화 단위로 받은 텍스트 조각들을 화면에 표시할 한 문장으로 합친다.
-    const updateTranscript = (itemId, segmentFinal) => {
-      const nextTranscript = [...segments.values()]
+    const buildTranscript = () => {
+      const joinedTranscript = [...segments.values()]
         .sort((first, second) => first.order - second.order)
         .map((segment) => segment.text.trim())
         .filter(Boolean)
         .join(' ')
+
+      return removeRepeatedSentenceEnding(joinedTranscript)
+    }
+
+    // 발화 단위로 받은 텍스트 조각들을 화면에 표시할 한 문장으로 합친다.
+    const updateTranscript = (itemId, segmentFinal) => {
+      const nextTranscript = buildTranscript()
 
       transcriptValue = nextTranscript
 
@@ -296,16 +362,25 @@ function useRealtimeTranscription({
     }
 
     // 브라우저 STT의 interim/final 결과를 Realtime과 같은 segment 구조로 맞춘다.
-    const updateBrowserSegment = ({ itemId, transcript, isFinal }) => {
+    const updateBrowserSegment = ({ itemId, cycle, transcript, isFinal }) => {
       if (!segments.has(itemId)) {
+        const isFirstSegmentInCycle = ![...segments.values()].some(
+          (segment) => segment.browserCycle === cycle,
+        )
+
         segments.set(itemId, {
           order: segmentOrder,
           text: '',
+          browserCycle: cycle,
+          boundaryBaseText: isFirstSegmentInCycle ? buildTranscript() : '',
         })
         segmentOrder += 1
       }
 
-      segments.get(itemId).text = transcript
+      const segment = segments.get(itemId)
+      segment.text = segment.boundaryBaseText
+        ? removeLeadingWordOverlap(segment.boundaryBaseText, transcript)
+        : transcript
       updateTranscript(itemId, isFinal)
     }
 
