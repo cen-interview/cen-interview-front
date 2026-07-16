@@ -353,18 +353,22 @@ function ChatInterviewPage() {
       setIsEndConfirmOpen(false)
     }
   }
-  const handleRubricConsent = (share) => {
-    void confirmRubricSharing(share)
-    navigateToReport(session)
-  }
+  const handleRubricConsent = async (share) => {
+  await confirmRubricSharing(share)
+}
 
-  const isRubricConsentOpen = Boolean(
-    session?.report && session.rubric_share_status === 'pending',
-  )
-  const transcript = session?.transcript ?? []
-  const isSubmitting = phase === 'submitting'
-  const isEnding = phase === 'ending'
-  const isBusy = isSubmitting || isEnding || isRubricConsentOpen
+const isRubricConsentOpen =
+  session?.rubric_share_status === 'pending'
+
+const transcript = session?.transcript ?? []
+const isSubmitting = phase === 'submitting'
+const isEnding = phase === 'ending'
+const isConfirmingRubric = phase === 'confirming-rubric'
+const isBusy =
+  isSubmitting ||
+  isEnding ||
+  isConfirmingRubric ||
+  isRubricConsentOpen
   const displayedTurns = pendingAnswer
     ? [
         ...transcript,
@@ -522,20 +526,21 @@ function ChatInterviewPage() {
             </h2>
             <div className="chat-end-dialog__actions">
               <button
-                type="button"
-                disabled={isEnding}
-                onClick={() => handleRubricConsent(false)}
-              >
-                공유하지 않기
-              </button>
-              <button
-                className="chat-end-dialog__confirm"
-                type="button"
-                disabled={isEnding}
-                onClick={() => handleRubricConsent(true)}
-              >
-                {isEnding ? '처리 중...' : '공유하기'}
-              </button>
+  type="button"
+  disabled={isConfirmingRubric}
+  onClick={() => handleRubricConsent(false)}
+>
+  {isConfirmingRubric ? '처리 중...' : '공유하지 않기'}
+</button>
+
+<button
+  className="chat-end-dialog__confirm"
+  type="button"
+  disabled={isConfirmingRubric}
+  onClick={() => handleRubricConsent(true)}
+>
+  {isConfirmingRubric ? '처리 중...' : '공유하기'}
+</button>
             </div>
           </section>
         </div>

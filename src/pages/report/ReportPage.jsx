@@ -34,6 +34,170 @@ const getEvaluationPoints = (evaluation) => {
   return [...new Set(rationale.filter(Boolean))]
 }
 
+const getCodeAnalyses = (report, evaluation, index) => {
+  const category = String(
+    evaluation.category ??
+      evaluation.question_category ??
+      '',
+  ).toLowerCase()
+  const isExplicitlyNotProject = category && category !== 'project'
+
+  if (isExplicitlyNotProject) {
+    return []
+  }
+
+  const analyses =
+    evaluation.code_analysis ??
+    evaluation.code_analyses ??
+    report.code_analysis?.[index] ??
+    report.output?.code_analysis?.[index] ??
+    []
+
+  return (Array.isArray(analyses) ? analyses : [analyses]).filter(Boolean)
+}
+
+const answerStatusLabels = {
+  correct: '답변 확인',
+  partial: '일부 보완 필요',
+  incorrect: '정정 필요',
+  unknown: '답변하지 못함',
+}
+
+const compatibilityLabels = {
+  current_valid: '현재 방식 사용 가능',
+  deprecated: '사용 중단 예정',
+  needs_improvement: '개선 권장',
+  improvement_needed: '개선 권장',
+  unknown: '확인 필요',
+}
+
+const getStatusLabel = (labels, status) =>
+  labels[status] ?? String(status ?? '확인 필요').replaceAll('_', ' ')
+
+function CodeBlock({ title, code }) {
+  if (!code) {
+    return null
+  }
+
+  return (
+    <section className="code-analysis__code-block">
+      <h5>{title}</h5>
+      <pre>
+        <code>{code}</code>
+      </pre>
+    </section>
+  )
+}
+
+function CodeAnalysis({ analyses }) {
+  if (analyses.length === 0) {
+    return null
+  }
+
+  return (
+    <details className="code-analysis">
+      <summary>
+        <span>
+          코드 및 최신 방식 분석
+          <small>프로젝트 코드 근거와 개선 방향을 확인해보세요.</small>
+        </span>
+        <b aria-hidden="true">⌄</b>
+      </summary>
+
+      <div className="code-analysis__body">
+        {analyses.map((analysis, analysisIndex) => (
+          <article
+            className="code-analysis__item"
+            key={`${analysis.source_file ?? analysis.topic ?? 'analysis'}-${analysisIndex}`}
+          >
+            <div className="code-analysis__heading">
+              <div>
+                <span>PROJECT</span>
+                <h4>{analysis.topic ?? '프로젝트 코드 분석'}</h4>
+              </div>
+              <div className="code-analysis__badges">
+                <em className={`status-badge status-badge--${analysis.answer_status ?? 'unknown'}`}>
+                  {getStatusLabel(answerStatusLabels, analysis.answer_status)}
+                </em>
+                <em className={`status-badge status-badge--${analysis.compatibility_status ?? 'unknown'}`}>
+                  {getStatusLabel(
+                    compatibilityLabels,
+                    analysis.compatibility_status,
+                  )}
+                </em>
+              </div>
+            </div>
+
+            {analysis.source_file && (
+              <p className="code-analysis__source">
+                <strong>근거 파일</strong>
+                <code>{analysis.source_file}</code>
+              </p>
+            )}
+
+            {analysis.code_assessment && (
+              <section className="code-analysis__text">
+                <h5>코드 분석</h5>
+                <p>{analysis.code_assessment}</p>
+              </section>
+            )}
+
+            {analysis.expected_answer && (
+              <section className="code-analysis__text code-analysis__text--answer">
+                <h5>기대 답변</h5>
+                <p>{analysis.expected_answer}</p>
+              </section>
+            )}
+
+            <div className="code-analysis__code-grid">
+              <CodeBlock title="현재 프로젝트 코드" code={analysis.current_code} />
+              <CodeBlock title="최신 구현 예시" code={analysis.modern_code} />
+            </div>
+
+            {analysis.improvement_reason && (
+              <section className="code-analysis__text code-analysis__text--improvement">
+                <h5>개선 방향</h5>
+                <p>{analysis.improvement_reason}</p>
+              </section>
+            )}
+
+            {(analysis.references ?? []).length > 0 && (
+              <section className="code-analysis__references">
+                <h5>참고 문서</h5>
+                <ul>
+                  {analysis.references.map((reference, referenceIndex) => {
+                    const url =
+                      typeof reference === 'string'
+                        ? reference
+                        : reference.url ?? reference.uri
+                    const label =
+                      typeof reference === 'string'
+                        ? reference
+                        : reference.title ?? reference.name ?? url
+                    const isLink = /^https?:\/\//i.test(url ?? '')
+
+                    return (
+                      <li key={`${url ?? label}-${referenceIndex}`}>
+                        {isLink ? (
+                          <a href={url} target="_blank" rel="noreferrer">
+                            {label}
+                          </a>
+                        ) : (
+                          label
+                        )}
+                      </li>
+                    )
+                  })}
+                </ul>
+              </section>
+            )}
+          </article>
+        ))}
+      </div>
+    </details>
+  )
+}
+
 function LineIcon({ name }) {
   const paths = {
     home: (
@@ -118,7 +282,7 @@ function ScoreRing({ score, tone }) {
   )
 }
 
-function QuestionReview({ item, index }) {
+function QuestionReview({ item, index, codeAnalyses }) {
   const score = clampScore(item.score)
   const { level, tone } = getScorePresentation(score)
   const points = getEvaluationPoints(item)
@@ -140,6 +304,8 @@ function QuestionReview({ item, index }) {
           <h4>평가 코멘트</h4>
           <p>{item.comment}</p>
         </div>
+
+        <CodeAnalysis analyses={codeAnalyses} />
       </div>
 
       <aside className="question-score" aria-label={`${index + 1}번 답변 평가`}>
@@ -336,6 +502,7 @@ function ReportPage() {
                   <QuestionReview
                     item={item}
                     index={index}
+                    codeAnalyses={getCodeAnalyses(report, item, index)}
                     key={item.question_id ?? `${item.question}-${index}`}
                   />
                 ))
