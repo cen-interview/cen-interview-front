@@ -12,6 +12,7 @@ const SERVER_STATES = new Set([
   'listening',
   'complete_candidate',
   'confirmation_pending',
+  'confirmation_prompting',
   'confirming_end',
   'committing',
   'committed',

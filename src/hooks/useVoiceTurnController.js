@@ -376,6 +376,7 @@ function useVoiceTurnController({
       if (
         phaseRef.current !== 'confirmation_response' ||
         !activeConfirmation ||
+        !activeConfirmation.responseReady ||
         activeConfirmation.responded ||
         !snapshot.segmentFinal ||
         !responseText
@@ -528,6 +529,23 @@ function useVoiceTurnController({
         return
       }
 
+      if (
+        phaseRef.current === 'confirmation_response' &&
+        activeConfirmation?.responseReady &&
+        !activeConfirmation.responded &&
+        socketReadyRef.current &&
+        questionIdRef.current
+      ) {
+        sendMessage({
+          type: 'turn.confirmation.response.activity.changed',
+          confirmation_id: activeConfirmation.confirmationId,
+          question_id: questionIdRef.current,
+          revision: activeConfirmation.baseRevision,
+          speech_active: nextSpeechActive,
+        })
+        return
+      }
+
       if (modeRef.current === 'answer') {
         if (nextSpeechActive) {
           deliveryMetricsTrackerRef.current.startSpeaking(activityChangedAt)
@@ -616,11 +634,14 @@ function useVoiceTurnController({
 
   const handleConfirmationRequested = useCallback(
     async (message) => {
+      const currentConfirmation = confirmationRef.current
+
       if (
         message.question_id !== questionIdRef.current ||
         message.revision !== revisionRef.current ||
         manualSubmissionRef.current ||
-        cancelledConfirmationIdsRef.current.has(message.confirmation_id)
+        cancelledConfirmationIdsRef.current.has(message.confirmation_id) ||
+        currentConfirmation?.confirmationId === message.confirmation_id
       ) {
         return
       }
@@ -628,6 +649,7 @@ function useVoiceTurnController({
       clearInitialSilenceTimer()
       clearPendingTranscript()
       deliveryMetricsTrackerRef.current.suspend()
+      setErrorMessage('')
       const nextConfirmation = {
         confirmationId: message.confirmation_id,
         baseRevision: message.revision,
@@ -635,6 +657,8 @@ function useVoiceTurnController({
         text: message.text,
         responseText: '',
         responseRevision: null,
+        responseReady: false,
+        playbackStatus: null,
         responded: false,
       }
       confirmationRef.current = nextConfirmation
@@ -645,7 +669,7 @@ function useVoiceTurnController({
 
       startBargeInDetection()
 
-      await playConfirmation([message.text])
+      const playedToEnd = await playConfirmation([message.text])
 
       if (
         confirmationRef.current?.confirmationId !== message.confirmation_id ||
@@ -656,8 +680,39 @@ function useVoiceTurnController({
 
       clearAudioBuffer()
       resetTranscript()
-      resumeListening()
+      const listeningStarted = resumeListening()
+
+      if (!listeningStarted) {
+        pauseListening()
+        setErrorMessage('확인 응답을 위한 음성 인식을 시작하지 못했습니다.')
+        updatePhase('confirmation_error')
+        return
+      }
+
       updatePhase('confirmation_response')
+      const playbackStatus = playedToEnd ? 'completed' : 'failed'
+      const readySent = sendMessage({
+        type: 'turn.confirmation.response.ready',
+        confirmation_id: message.confirmation_id,
+        question_id: message.question_id,
+        revision: message.revision,
+        playback_status: playbackStatus,
+      })
+
+      if (!readySent) {
+        pauseListening()
+        setErrorMessage('확인 응답 준비 상태를 서버에 전달하지 못했습니다.')
+        updatePhase('confirmation_error')
+        return
+      }
+
+      const readyConfirmation = {
+        ...nextConfirmation,
+        responseReady: true,
+        playbackStatus,
+      }
+      confirmationRef.current = readyConfirmation
+      setConfirmation(readyConfirmation)
     },
     [
       clearAudioBuffer,
@@ -667,6 +722,7 @@ function useVoiceTurnController({
       playConfirmation,
       resetTranscript,
       resumeListening,
+      sendMessage,
       startBargeInDetection,
       updatePhase,
     ],

@@ -612,7 +612,22 @@ function VoiceInterviewSession({ accessToken }) {
   const isConfirmationFlow = [
     'confirmation_tts',
     'confirmation_response',
+    'confirmation_error',
   ].includes(voiceTurnController.phase)
+  const shouldDisplayConfirmationTurn = [
+    'confirmation_tts',
+    'confirmation_response',
+    'confirmation_error',
+    'judging',
+  ].includes(voiceTurnController.phase)
+  const confirmationTurn =
+    shouldDisplayConfirmationTurn && voiceTurnController.confirmation?.text
+      ? {
+          role: 'interviewer',
+          text: voiceTurnController.confirmation.text,
+          question_id: session?.question?.question_id,
+        }
+      : null
   const displayedTranscript =
     voiceTurnController.phase === 'confirmation_tts'
       ? voiceTurnController.answerText
@@ -858,13 +873,17 @@ function VoiceInterviewSession({ accessToken }) {
 
   if (voiceTurnController.phase === 'confirmation_tts') {
     voiceStatusTitle = '답변 종료 확인 중'
-    voiceStatusMessage =
-      voiceTurnController.confirmation?.text || '확인 질문을 재생하고 있습니다'
+    voiceStatusMessage = '면접관의 확인 질문을 재생하고 있습니다'
   }
 
   if (voiceTurnController.phase === 'confirmation_response') {
     voiceStatusTitle = '확인 응답을 듣고 있어요'
     voiceStatusMessage = '답변을 마쳤는지 짧게 말씀해 주세요'
+  }
+
+  if (voiceTurnController.phase === 'confirmation_error') {
+    voiceStatusTitle = '확인 응답 준비 실패'
+    voiceStatusMessage = '음성 연결이 복구될 때까지 현재 답변을 유지합니다'
   }
 
   if (voiceTurnController.phase === 'barge_in') {
@@ -1000,6 +1019,13 @@ function VoiceInterviewSession({ accessToken }) {
             </p>
           )}
         </section>
+
+        {confirmationTurn && (
+          <VoiceConversationTurn
+            turn={confirmationTurn}
+            onStreamComplete={handleReactionStreamComplete}
+          />
+        )}
       </main>
 
       <section className="voice-status" aria-label="인터뷰 음성 상태">
