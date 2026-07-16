@@ -18,6 +18,16 @@ const waveform = [
   10, 19, 27, 17, 12, 22, 39, 48, 30, 17, 10, 15, 24, 16,
 ]
 
+const getLastInterviewerTurnIndex = (turns) => {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    if (turns[index].role === 'interviewer') {
+      return index
+    }
+  }
+
+  return -1
+}
+
 function VoiceSessionState({ errorMessage, onRetry }) {
   const hasError = Boolean(errorMessage)
 
@@ -57,11 +67,45 @@ function VoiceSessionState({ errorMessage, onRetry }) {
   )
 }
 
+function VoiceConversationTurn({ turn, speechErrorMessage }) {
+  if (turn.role === 'candidate') {
+    return (
+      <section className="voice-message voice-message--answer">
+        <div className="voice-answer-bubble">
+          <p className="voice-answer-bubble__name">나의 답변</p>
+          <p className="voice-answer-bubble__text">{turn.text}</p>
+        </div>
+      </section>
+    )
+  }
+
+  return (
+    <section className="interviewer" aria-label="AI 면접관 질문">
+      <div className="interviewer__visual">
+        <div className="interviewer__glow" aria-hidden="true" />
+        <img src={mascotImage} alt="" />
+        <div className="interviewer__shadow" aria-hidden="true" />
+      </div>
+
+      <div className="question-bubble">
+        <p className="question-bubble__name">면접관 센</p>
+        <p className="question-bubble__text">{turn.text}</p>
+        {speechErrorMessage && (
+          <p className="question-bubble__error" role="alert">
+            {speechErrorMessage}
+          </p>
+        )}
+      </div>
+    </section>
+  )
+}
+
 function VoiceInterviewSession({ accessToken }) {
   const navigate = useNavigate()
   const [answerErrorMessage, setAnswerErrorMessage] = useState('')
   const [isFinalizing, setIsFinalizing] = useState(false)
   const voiceTurnControllerRef = useRef(null)
+  const pageEndRef = useRef(null)
   const handleTranscriptSnapshot = useCallback((snapshot) => {
     voiceTurnControllerRef.current?.handleTranscriptSnapshot(snapshot)
   }, [])
@@ -153,6 +197,14 @@ function VoiceInterviewSession({ accessToken }) {
     voiceTurnReadyState?.questionId === session?.question?.question_id
   const interviewerUtterance =
     session?.last_utterance || session?.question?.text || ''
+  const sessionTranscript = Array.isArray(session?.transcript)
+    ? session.transcript
+    : []
+  const conversationTurns = sessionTranscript.length
+    ? sessionTranscript
+    : [{ role: 'interviewer', text: interviewerUtterance }]
+  const lastInterviewerTurnIndex =
+    getLastInterviewerTurnIndex(conversationTurns)
   const isQuestionSpeechBusy =
     questionSpeechPhase === 'loading' || questionSpeechPhase === 'playing'
   const isConfirmationSpeechBusy =
@@ -279,6 +331,10 @@ function VoiceInterviewSession({ accessToken }) {
       },
     )
   }, [navigate, pauseListening, session, stopConfirmation, stopSpeech])
+
+  useEffect(() => {
+    pageEndRef.current?.scrollIntoView({ block: 'end' })
+  }, [session?.question?.question_id, session?.transcript?.length])
 
   const handleAnswerSubmit = async () => {
     const submittingQuestionId = session?.question?.question_id
@@ -496,42 +552,19 @@ function VoiceInterviewSession({ accessToken }) {
         }
       />
 
-      <main className="voice-interview__main">
-        <section className="interviewer" aria-label="AI 면접관 질문">
-          <div className="interviewer__visual">
-            <div className="interviewer__glow" aria-hidden="true" />
-            <img
-              src={mascotImage}
-              alt="헤드셋을 쓰고 질문하는 AI 면접관"
-            />
-            <div className="interviewer__shadow" aria-hidden="true" />
-          </div>
-
-          <div className="question-bubble">
-            <span className="question-bubble__tail" aria-hidden="true" />
-            <p className="question-bubble__name">면접관 센</p>
-            <p className="question-bubble__text">{interviewerUtterance}</p>
-            <div className="question-bubble__actions">
-              <button
-                type="button"
-                disabled={
-                  isInteractionBusy ||
-                  voiceTurnController.speechActive ||
-                  Boolean(voiceTurnController.answerText)
-                }
-                onClick={() => void playCurrentQuestion()}
-              >
-                {isQuestionSpeechBusy ? '질문 재생 중...' : '질문 듣기'}
-              </button>
-              <span>AI로 생성된 음성입니다.</span>
-            </div>
-            {speechErrorMessage && (
-              <p className="question-bubble__error" role="alert">
-                {speechErrorMessage}
-              </p>
-            )}
-          </div>
-        </section>
+      <main
+        className="voice-interview__main"
+        aria-label="음성 면접 대화"
+      >
+        {conversationTurns.map((turn, index) => (
+          <VoiceConversationTurn
+            turn={turn}
+            speechErrorMessage={
+              index === lastInterviewerTurnIndex ? speechErrorMessage : ''
+            }
+            key={`${turn.role}-${turn.created_at ?? turn.question_id ?? index}`}
+          />
+        ))}
 
         <section className="live-answer" aria-label="실시간 답변 내용">
           <header className="live-answer__header">
@@ -539,7 +572,7 @@ function VoiceInterviewSession({ accessToken }) {
               <span className="live-answer__pulse" aria-hidden="true">
                 <i />
               </span>
-              실시간 답변
+              나의 답변
             </h1>
             <p>
               <span className="signal-bars" aria-hidden="true">
@@ -551,7 +584,7 @@ function VoiceInterviewSession({ accessToken }) {
             </p>
           </header>
 
-          <div className="live-answer__copy">
+          <div className="live-answer__copy" aria-live="polite">
             <p
               className={
                 !displayedTranscript ? 'live-answer__placeholder' : undefined
@@ -636,6 +669,8 @@ function VoiceInterviewSession({ accessToken }) {
           <span>{voiceStatusMessage}</span>
         </div>
       </section>
+
+      <div ref={pageEndRef} aria-hidden="true" />
     </div>
   )
 }
