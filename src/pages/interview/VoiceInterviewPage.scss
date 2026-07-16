@@ -367,6 +367,16 @@ $page-background: #f4f8ff;
     white-space: pre-line;
   }
 
+  &__stream-cursor {
+    display: inline-block;
+    width: 2px;
+    height: 18px;
+    margin-left: 3px;
+    background: $bright-blue;
+    animation: voice-cursor 0.9s steps(1) infinite;
+    vertical-align: -3px;
+  }
+
   &__error {
     margin: 11px 0 0;
     color: #d23d50;
@@ -383,6 +393,10 @@ $page-background: #f4f8ff;
     justify-content: flex-end;
     padding-left: 280px;
   }
+}
+
+.live-answer[hidden] {
+  display: none;
 }
 
 .voice-answer-bubble {
@@ -757,6 +771,7 @@ $page-background: #f4f8ff;
 @media (prefers-reduced-motion: reduce) {
   .voice-interview__page-name > span,
   .interviewer__visual img,
+  .question-bubble__stream-cursor,
   .live-answer__cursor,
   .signal-bars i,
   .voice-status__recording::before,

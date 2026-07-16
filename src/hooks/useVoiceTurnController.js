@@ -38,6 +38,7 @@ function useVoiceTurnController({
   replaceTranscript,
   playConfirmation,
   stopConfirmation,
+  playAnswerReaction,
   onSessionCommitted,
 }) {
   const [phase, setPhase] = useState('idle')
@@ -62,6 +63,7 @@ function useVoiceTurnController({
   const lastSentSnapshotRef = useRef(null)
   const socketReadyRef = useRef(false)
   const automaticallyCommittedQuestionsRef = useRef(new Set())
+  const playedReactionQuestionsRef = useRef(new Set())
   const cancelledConfirmationIdsRef = useRef(new Set())
   const previousSocketStatusRef = useRef(socketStatus)
   const reconnectPendingRef = useRef(false)
@@ -785,7 +787,10 @@ function useVoiceTurnController({
           }
 
           if (message.code === 'commit_failed') {
+            playedReactionQuestionsRef.current.delete(questionIdRef.current)
             manualSubmissionRef.current = false
+            syncBlockedRef.current = false
+            deliveryMetricsTrackerRef.current.resume()
             updatePhase('listening')
             resumeListening()
           }
@@ -800,6 +805,26 @@ function useVoiceTurnController({
       }
 
       if (message.question_id !== questionIdRef.current) {
+        return
+      }
+
+      if (message.type === 'answer.reaction') {
+        if (playedReactionQuestionsRef.current.has(message.question_id)) {
+          return
+        }
+
+        playedReactionQuestionsRef.current.add(message.question_id)
+        clearInitialSilenceTimer()
+        clearPendingTranscript()
+        deliveryMetricsTrackerRef.current.suspend()
+        manualSubmissionRef.current = true
+        pauseListening()
+        stopConfirmation()
+        updatePhase('committing')
+        void playAnswerReaction({
+          ...message,
+          answer_text: answerTextRef.current,
+        })
         return
       }
 
@@ -856,6 +881,7 @@ function useVoiceTurnController({
       handleConfirmationRequested,
       onSessionCommitted,
       pauseListening,
+      playAnswerReaction,
       restoreAnswerAfterConfirmation,
       resumeListening,
       sendMessage,

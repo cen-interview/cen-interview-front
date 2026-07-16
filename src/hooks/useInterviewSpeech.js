@@ -4,28 +4,37 @@ import { generateInterviewSpeech } from '../api/interview.js'
 const AUTOPLAY_ERROR_MESSAGE =
   '브라우저에서 자동 재생을 허용하지 않았습니다. 질문 듣기를 눌러주세요.'
 
+const normalizeUtterances = (utterances) => {
+  return utterances.map((utterance) => utterance?.trim()).filter(Boolean)
+}
+
 /**
- * 면접관 발화 목록을 순서대로 TTS로 변환하고 재생한다.
+ * 면접관 발화를 미리 합성하고 요청 순서대로 끊김 없이 재생한다.
  *
- * 각 발화는 백엔드에서 MP3 Blob으로 받은 뒤 임시 Object URL로 재생한다.
- * 새 재생이 시작되거나 화면을 벗어나면 진행 중인 요청과 오디오를 정리해
- * 이전 질문이 다음 질문과 겹쳐 들리지 않도록 한다.
+ * playQueue는 기존 재생을 취소하고 새 큐로 교체한다. enqueueAfterCurrent는
+ * 현재 음성을 유지한 채 다음 큐의 TTS 요청을 즉시 시작하고, 실제 재생만
+ * 앞선 큐가 끝날 때까지 기다린다. 합성된 Blob은 문장별로 캐싱하므로 고정
+ * 리액션과 동일 문장을 다시 받을 때 네트워크 요청을 반복하지 않는다.
  *
  * @returns {{
  *   phase: 'idle' | 'loading' | 'playing' | 'completed' | 'error',
  *   errorMessage: string,
  *   playQueue: (utterances: string[]) => Promise<boolean>,
+ *   enqueueAfterCurrent: (utterances: string[]) => Promise<boolean>,
+ *   warmCache: (utterances: string[]) => Promise<boolean[]>,
  *   stop: () => void
- * }} TTS 재생 상태와 제어 함수
+ * }} TTS 캐시, 직렬 재생 상태와 제어 함수
  */
 function useInterviewSpeech() {
   const [phase, setPhase] = useState('idle')
   const [errorMessage, setErrorMessage] = useState('')
   const audioRef = useRef(null)
   const objectUrlRef = useRef('')
-  const abortControllerRef = useRef(null)
   const playbackIdRef = useRef(0)
   const pendingPlaybackRef = useRef(null)
+  const queueTailRef = useRef(Promise.resolve(true))
+  const audioCacheRef = useRef(new Map())
+  const requestControllersRef = useRef(new Set())
   const mountedRef = useRef(true)
 
   const releaseAudio = useCallback(() => {
@@ -46,63 +55,81 @@ function useInterviewSpeech() {
 
   const cancelCurrentPlayback = useCallback(() => {
     playbackIdRef.current += 1
-    abortControllerRef.current?.abort()
-    abortControllerRef.current = null
     pendingPlaybackRef.current?.(false)
     pendingPlaybackRef.current = null
     releaseAudio()
+    queueTailRef.current = Promise.resolve(false)
   }, [releaseAudio])
 
-  const stop = useCallback(() => {
-    cancelCurrentPlayback()
+  const getCachedSpeech = useCallback((utterance) => {
+    const cachedSpeech = audioCacheRef.current.get(utterance)
 
-    if (mountedRef.current) {
-      setPhase('idle')
-      setErrorMessage('')
+    if (cachedSpeech) {
+      return cachedSpeech
     }
-  }, [cancelCurrentPlayback])
 
-  const playQueue = useCallback(
-    async (utterances) => {
-      const playableUtterances = utterances
-        .map((utterance) => utterance?.trim())
-        .filter(Boolean)
+    const abortController = new AbortController()
+    requestControllersRef.current.add(abortController)
+    const speechRequest = generateInterviewSpeech(utterance, {
+      signal: abortController.signal,
+    })
+      .catch((error) => {
+        audioCacheRef.current.delete(utterance)
+        throw error
+      })
+      .finally(() => {
+        requestControllersRef.current.delete(abortController)
+      })
+    audioCacheRef.current.set(utterance, speechRequest)
+    return speechRequest
+  }, [])
 
-      cancelCurrentPlayback()
-      const playbackId = playbackIdRef.current
+  const prepareQueue = useCallback(
+    (utterances) => {
+      return normalizeUtterances(utterances).map((utterance) => ({
+        audioBlob: getCachedSpeech(utterance),
+      }))
+    },
+    [getCachedSpeech],
+  )
 
-      if (playableUtterances.length === 0) {
-        setPhase('error')
-        setErrorMessage('재생할 면접관 질문이 없습니다.')
+  const playPreparedQueue = useCallback(
+    async (preparedQueue, playbackId) => {
+      if (preparedQueue.length === 0) {
+        if (mountedRef.current) {
+          setPhase('error')
+          setErrorMessage('재생할 면접관 질문이 없습니다.')
+        }
         return false
       }
 
-      setErrorMessage('')
+      if (mountedRef.current) {
+        setErrorMessage('')
+      }
 
       try {
-        for (const utterance of playableUtterances) {
+        for (const preparedSpeech of preparedQueue) {
           if (playbackId !== playbackIdRef.current) {
             return false
           }
 
-          const abortController = new AbortController()
-          abortControllerRef.current = abortController
-          setPhase('loading')
-
-          const audioBlob = await generateInterviewSpeech(utterance, {
-            signal: abortController.signal,
-          })
+          if (mountedRef.current) {
+            setPhase('loading')
+          }
+          const audioBlob = await preparedSpeech.audioBlob
 
           if (playbackId !== playbackIdRef.current) {
             return false
           }
 
-          abortControllerRef.current = null
           const objectUrl = URL.createObjectURL(audioBlob)
           const audio = new Audio(objectUrl)
           objectUrlRef.current = objectUrl
           audioRef.current = audio
-          setPhase('playing')
+
+          if (mountedRef.current) {
+            setPhase('playing')
+          }
 
           const playedToEnd = await new Promise((resolve, reject) => {
             pendingPlaybackRef.current = resolve
@@ -137,17 +164,14 @@ function useInterviewSpeech() {
           }
         }
 
-        setPhase('completed')
+        if (mountedRef.current) {
+          setPhase('completed')
+        }
         return true
       } catch (playError) {
         releaseAudio()
-        abortControllerRef.current = null
 
-        if (
-          playbackId !== playbackIdRef.current ||
-          playError.name === 'AbortError' ||
-          playError.name === 'CanceledError'
-        ) {
+        if (playbackId !== playbackIdRef.current) {
           return false
         }
 
@@ -156,13 +180,65 @@ function useInterviewSpeech() {
             ? AUTOPLAY_ERROR_MESSAGE
             : '면접관 음성을 생성하거나 재생하지 못했습니다.'
 
-        setPhase('error')
-        setErrorMessage(message)
+        if (mountedRef.current) {
+          setPhase('error')
+          setErrorMessage(message)
+        }
         return false
       }
     },
-    [cancelCurrentPlayback, releaseAudio],
+    [releaseAudio],
   )
+
+  const playQueue = useCallback(
+    (utterances) => {
+      cancelCurrentPlayback()
+      const playbackId = playbackIdRef.current
+      const preparedQueue = prepareQueue(utterances)
+      const playback = playPreparedQueue(preparedQueue, playbackId)
+      queueTailRef.current = playback
+      return playback
+    },
+    [cancelCurrentPlayback, playPreparedQueue, prepareQueue],
+  )
+
+  const enqueueAfterCurrent = useCallback(
+    (utterances) => {
+      const playbackId = playbackIdRef.current
+      // TTS Promise는 앞선 음성 재생을 기다리기 전에 생성해 프리페치한다.
+      const preparedQueue = prepareQueue(utterances)
+      const previousQueue = queueTailRef.current
+      const playback = previousQueue.then(() => {
+        return playPreparedQueue(preparedQueue, playbackId)
+      })
+      queueTailRef.current = playback
+      return playback
+    },
+    [playPreparedQueue, prepareQueue],
+  )
+
+  const warmCache = useCallback(
+    (utterances) => {
+      return Promise.all(
+        normalizeUtterances(utterances).map((utterance) => {
+          return getCachedSpeech(utterance).then(
+            () => true,
+            () => false,
+          )
+        }),
+      )
+    },
+    [getCachedSpeech],
+  )
+
+  const stop = useCallback(() => {
+    cancelCurrentPlayback()
+
+    if (mountedRef.current) {
+      setPhase('idle')
+      setErrorMessage('')
+    }
+  }, [cancelCurrentPlayback])
 
   useEffect(() => {
     mountedRef.current = true
@@ -170,6 +246,9 @@ function useInterviewSpeech() {
     return () => {
       mountedRef.current = false
       cancelCurrentPlayback()
+      requestControllersRef.current.forEach((controller) => controller.abort())
+      requestControllersRef.current.clear()
+      audioCacheRef.current.clear()
     }
   }, [cancelCurrentPlayback])
 
@@ -177,6 +256,8 @@ function useInterviewSpeech() {
     phase,
     errorMessage,
     playQueue,
+    enqueueAfterCurrent,
+    warmCache,
     stop,
   }
 }
