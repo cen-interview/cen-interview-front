@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiClient } from '../api/client'
+import {
+  createBrowserSpeechRecognition,
+  isBrowserSpeechRecognitionSupported,
+} from '../features/interview/browserSpeechRecognition.js'
 
 const OPENAI_REALTIME_URL = 'https://api.openai.com/v1/realtime/calls'
 // 소리로 인정할 최소 볼륨 기준
@@ -16,12 +20,13 @@ const BARGE_IN_GRACE_MS = 350
 const BARGE_IN_HOLD_MS = 120
 
 /**
- * OpenAI Realtime 전사 연결과 브라우저 발화 구간을 관리한다.
+ * 브라우저 우선 STT와 OpenAI Realtime 폴백, 발화 구간을 관리한다.
  *
  * 화면용 누적 transcript 외에 Voice Turn WebSocket에서 사용할 수 있는 누적
  * 전사 snapshot과 실제 발화 시작·종료 snapshot을 만든다. callback은 Ref로
- * 보관하므로 호출하는 컴포넌트가 다시 렌더링돼도 WebRTC 연결을 재생성하지
- * 않는다.
+ * 보관하므로 호출하는 컴포넌트가 다시 렌더링돼도 음성 인식 연결을 재생성하지
+ * 않는다. SpeechRecognition이 없거나 실행 중 치명적 오류가 나면 그 시점에만
+ * OpenAI Realtime WebRTC 연결을 만든다.
  *
  * @param {{
  *   onPermissionGranted?: () => Promise<object>,
@@ -29,7 +34,7 @@ const BARGE_IN_HOLD_MS = 120
  *   onTranscriptSnapshot?: (snapshot: { text: string, itemId: string, segmentFinal: boolean }) => void,
  *   onSpeechActivityChange?: (snapshot: { speechActive: boolean, changedAt: number }) => void
  * }} options 음성 세션 시작과 구조화된 STT 이벤트 callback
- * @returns Realtime 상태, 누적 전사·발화 snapshot과 마이크 제어 함수
+ * @returns STT 상태, 누적 전사·발화 snapshot과 마이크 제어 함수
  */
 function useRealtimeTranscription({
   onPermissionGranted,
@@ -50,6 +55,10 @@ function useRealtimeTranscription({
   const onSpeechActivityChangeRef = useRef(onSpeechActivityChange)
   const audioTrackRef = useRef(null)
   const dataChannelRef = useRef(null)
+  const transcriptionReadyRef = useRef(false)
+  const listeningRequestedRef = useRef(false)
+  const startTranscriptionCaptureRef = useRef(() => true)
+  const stopTranscriptionCaptureRef = useRef(() => {})
   const startVolumeMonitoringRef = useRef(() => {})
   const stopVolumeMonitoringRef = useRef(() => {})
   const setMonitoringModeRef = useRef(() => {})
@@ -76,6 +85,9 @@ function useRealtimeTranscription({
 
   // TTS 재생 직전 마이크 전송과 브라우저 음량 감지를 함께 멈춘다.
   const pauseListening = useCallback(() => {
+    listeningRequestedRef.current = false
+    stopTranscriptionCaptureRef.current()
+
     if (audioTrackRef.current) {
       audioTrackRef.current.enabled = false
     }
@@ -86,19 +98,22 @@ function useRealtimeTranscription({
     )
   }, [])
 
-  // Realtime DataChannel이 준비된 경우에만 마이크 수집을 다시 시작한다.
+  // 선택된 STT 엔진이 준비된 경우에만 마이크 수집을 다시 시작한다.
   const resumeListening = useCallback(() => {
-    if (
-      !audioTrackRef.current ||
-      dataChannelRef.current?.readyState !== 'open'
-    ) {
+    if (!audioTrackRef.current || !transcriptionReadyRef.current) {
       return false
     }
 
+    listeningRequestedRef.current = true
     audioTrackRef.current.enabled = true
     setMonitoringModeRef.current('answer')
+    const transcriptionCaptureStarted =
+      startTranscriptionCaptureRef.current()
     startVolumeMonitoringRef.current()
-    setStatus('listening')
+
+    if (transcriptionCaptureStarted && transcriptionReadyRef.current) {
+      setStatus('listening')
+    }
     return true
   }, [])
 
@@ -146,6 +161,9 @@ function useRealtimeTranscription({
     let analyser
     let samples
     let animationFrameId
+    let recognitionController
+    let transcriptionEngine = ''
+    let openAIFallbackPromise = null
 
     const segments = new Map()
     let segmentOrder = 0
@@ -277,19 +295,41 @@ function useRealtimeTranscription({
       updateTranscript(itemId, isCompleted)
     }
 
-    // 이 모델은 서버 VAD를 사용하지 않으므로 브라우저가 오디오 구간을 직접 확정한다.
+    // 브라우저 STT의 interim/final 결과를 Realtime과 같은 segment 구조로 맞춘다.
+    const updateBrowserSegment = ({ itemId, transcript, isFinal }) => {
+      if (!segments.has(itemId)) {
+        segments.set(itemId, {
+          order: segmentOrder,
+          text: '',
+        })
+        segmentOrder += 1
+      }
+
+      segments.get(itemId).text = transcript
+      updateTranscript(itemId, isFinal)
+    }
+
+    // 로컬 VAD가 선택된 STT 엔진의 현재 오디오 또는 인식 cycle을 확정한다.
     const commitAudio = ({ preserveActivity = false } = {}) => {
-      if (dataChannel?.readyState !== 'open' || !bufferHasSpeech) {
+      if (!bufferHasSpeech) {
         return false
       }
 
-      dataChannel.send(
-        JSON.stringify({
-          type: 'input_audio_buffer.commit',
-        }),
-      )
+      if (transcriptionEngine === 'browser') {
+        recognitionController?.commit()
+      } else {
+        if (dataChannel?.readyState !== 'open') {
+          return false
+        }
 
-      pendingCommitCount += 1
+        dataChannel.send(
+          JSON.stringify({
+            type: 'input_audio_buffer.commit',
+          }),
+        )
+
+        pendingCommitCount += 1
+      }
 
       bufferHasSpeech = false
       speechStartedAt = 0
@@ -341,6 +381,8 @@ function useRealtimeTranscription({
               bufferHasSpeech = true
               speechStartedAt = bargeInLoudStartedAt
               lastSpeechAt = now
+              listeningRequestedRef.current = true
+              startTranscriptionCaptureRef.current()
               updateSpeechActivity(true)
             }
           } else {
@@ -401,7 +443,7 @@ function useRealtimeTranscription({
       bargeInLoudStartedAt = 0
     }
     startBargeInDetectionRef.current = () => {
-      if (!audioTrack || dataChannel?.readyState !== 'open') {
+      if (!audioTrack || !transcriptionReadyRef.current) {
         return false
       }
 
@@ -415,8 +457,22 @@ function useRealtimeTranscription({
       return true
     }
     finalizeTranscriptRef.current = async () => {
+      listeningRequestedRef.current = false
+
       if (audioTrack) {
         audioTrack.enabled = false
+      }
+
+      if (transcriptionEngine === 'browser') {
+        const browserFinalization = recognitionController?.finalize()
+        stopVolumeMonitoring()
+
+        if (!disposed) {
+          setStatus('ready')
+        }
+
+        await browserFinalization
+        return transcriptValue.trim()
       }
 
       commitAudio()
@@ -482,6 +538,7 @@ function useRealtimeTranscription({
     // 연결 실패나 페이지 이탈 시 브라우저 음성·통신 자원을 한곳에서 정리한다.
     const cleanupVoiceResources = () => {
       stopVolumeMonitoring()
+      recognitionController?.destroy()
 
       audioTrack?.stop()
       mediaStream?.getTracks().forEach((track) => {
@@ -498,6 +555,10 @@ function useRealtimeTranscription({
       })
       audioTrackRef.current = null
       dataChannelRef.current = null
+      transcriptionReadyRef.current = false
+      listeningRequestedRef.current = false
+      startTranscriptionCaptureRef.current = () => true
+      stopTranscriptionCaptureRef.current = () => {}
       startVolumeMonitoringRef.current = () => {}
       stopVolumeMonitoringRef.current = () => {}
       setMonitoringModeRef.current = () => {}
@@ -506,15 +567,188 @@ function useRealtimeTranscription({
       finalizeTranscriptRef.current = async () => ''
     }
 
+    const handleTranscriptionStartError = (startError) => {
+      if (disposed) {
+        return
+      }
+
+      cleanupVoiceResources()
+
+      if (startError.name === 'NotAllowedError') {
+        setError('마이크 사용 권한이 필요합니다.')
+        setStatus('permission-denied')
+        return
+      }
+
+      setError(startError.message || '음성 인식을 시작하지 못했습니다.')
+      setStatus('error')
+    }
+
+    const startOpenAIRealtimeTranscription = async () => {
+      if (!window.RTCPeerConnection) {
+        throw new Error('이 브라우저에서는 WebRTC를 사용할 수 없습니다.')
+      }
+
+      transcriptionEngine = 'openai'
+      transcriptionReadyRef.current = false
+      startTranscriptionCaptureRef.current = () => true
+      stopTranscriptionCaptureRef.current = () => {}
+      setStatus('connecting')
+
+      // 브라우저 STT가 없거나 실패했을 때만 Realtime 단기 토큰을 발급한다.
+      const tokenResponse = await apiClient.post(
+        '/interview/realtime-transcription/token',
+      )
+      const ephemeralKey =
+        tokenResponse.data.value ?? tokenResponse.data.client_secret?.value
+      const expiresAt =
+        tokenResponse.data.expires_at ??
+        tokenResponse.data.client_secret?.expires_at
+
+      if (!ephemeralKey) {
+        throw new Error('백엔드에서 Realtime 임시 토큰을 받지 못했습니다.')
+      }
+
+      if (expiresAt && expiresAt * 1000 <= Date.now()) {
+        throw new Error('Realtime 임시 토큰이 만료되었습니다.')
+      }
+
+      if (disposed) {
+        return
+      }
+
+      peerConnection = new RTCPeerConnection()
+      peerConnection.addTrack(audioTrack, mediaStream)
+      dataChannel = peerConnection.createDataChannel('oai-events')
+      dataChannelRef.current = dataChannel
+      dataChannel.addEventListener('message', ({ data }) => {
+        const event = JSON.parse(data)
+
+        if (
+          event.type === 'conversation.item.input_audio_transcription.delta'
+        ) {
+          updateSegment(event)
+        }
+
+        if (
+          event.type === 'conversation.item.input_audio_transcription.completed'
+        ) {
+          updateSegment(event, true)
+          pendingCommitCount = Math.max(0, pendingCommitCount - 1)
+          resolveFinalizationWaiters()
+        }
+
+        if (event.type === 'error' && !disposed) {
+          setError(event.error?.message ?? '음성 인식 중 오류가 발생했습니다.')
+          setStatus('error')
+        }
+      })
+
+      peerConnection.addEventListener('connectionstatechange', () => {
+        if (
+          !disposed &&
+          ['failed', 'disconnected'].includes(peerConnection.connectionState)
+        ) {
+          setError('OpenAI Realtime 연결이 종료되었습니다.')
+          setStatus('error')
+        }
+      })
+
+      const offer = await peerConnection.createOffer()
+      await peerConnection.setLocalDescription(offer)
+
+      const sdpResponse = await fetch(OPENAI_REALTIME_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${ephemeralKey}`,
+          'Content-Type': 'application/sdp',
+        },
+        body: offer.sdp,
+      })
+
+      if (!sdpResponse.ok) {
+        throw new Error(await sdpResponse.text())
+      }
+
+      await peerConnection.setRemoteDescription({
+        type: 'answer',
+        sdp: await sdpResponse.text(),
+      })
+      await waitForDataChannelOpen()
+
+      if (disposed) {
+        return
+      }
+
+      transcriptionReadyRef.current = true
+      setError('')
+
+      if (listeningRequestedRef.current) {
+        audioTrack.enabled = true
+        startVolumeMonitoring()
+        setStatus('listening')
+      } else {
+        audioTrack.enabled = false
+        setStatus('ready')
+      }
+    }
+
+    const activateOpenAIFallback = () => {
+      if (openAIFallbackPromise || disposed) {
+        return openAIFallbackPromise
+      }
+
+      recognitionController?.destroy()
+      recognitionController = null
+      transcriptionReadyRef.current = false
+
+      openAIFallbackPromise = startOpenAIRealtimeTranscription().catch(
+        (fallbackError) => {
+          handleTranscriptionStartError(fallbackError)
+        },
+      )
+
+      return openAIFallbackPromise
+    }
+
+    const startBrowserTranscription = () => {
+      transcriptionEngine = 'browser'
+      recognitionController = createBrowserSpeechRecognition({
+        onResult: updateBrowserSegment,
+        onFatalError: () => {
+          void activateOpenAIFallback()
+        },
+      })
+      startTranscriptionCaptureRef.current = () => {
+        return recognitionController?.start() ?? false
+      }
+      stopTranscriptionCaptureRef.current = () => {
+        recognitionController?.pause()
+      }
+      transcriptionReadyRef.current = true
+      setError('')
+
+      if (startListeningOnConnectRef.current) {
+        listeningRequestedRef.current = true
+        audioTrack.enabled = true
+        const recognitionStarted = recognitionController.start()
+        startVolumeMonitoring()
+
+        if (recognitionStarted && transcriptionEngine === 'browser') {
+          setStatus('listening')
+        }
+      } else {
+        setStatus('ready')
+      }
+    }
+
     const startTranscription = async () => {
       try {
-        // WebRTC 또는 마이크 API가 없는 브라우저에서는 음성 인식을 시작할 수 없다.
-        if (!window.RTCPeerConnection || !navigator.mediaDevices?.getUserMedia) {
+        if (!navigator.mediaDevices?.getUserMedia) {
           setStatus('unsupported')
           return
         }
 
-        // 단기 토큰이나 세션을 만들기 전에 브라우저 마이크 권한부터 확인한다.
         setStatus('requesting-permission')
         mediaStream = await navigator.mediaDevices.getUserMedia({
           audio: {
@@ -534,11 +768,9 @@ function useRealtimeTranscription({
           throw new Error('사용할 수 있는 마이크 오디오 트랙이 없습니다.')
         }
 
-        // 연결과 면접관 발화 준비 중인 소리가 전사 버퍼에 들어가지 않도록 한다.
         audioTrack.enabled = false
         audioTrackRef.current = audioTrack
 
-        // 음성 면접 세션은 마이크 권한이 확인된 뒤 Realtime 연결보다 먼저 만든다.
         if (onPermissionGrantedRef.current) {
           const session = await onPermissionGrantedRef.current()
 
@@ -551,125 +783,14 @@ function useRealtimeTranscription({
           return
         }
 
-        setStatus('connecting')
-
-        // 권한 확인 직후 새 단기 토큰을 발급받아 만료 전 WebRTC 연결에 사용한다.
-        const tokenResponse = await apiClient.post(
-          '/interview/realtime-transcription/token',
-        )
-        const ephemeralKey =
-          tokenResponse.data.value ??
-          tokenResponse.data.client_secret?.value
-        const expiresAt =
-          tokenResponse.data.expires_at ??
-          tokenResponse.data.client_secret?.expires_at
-
-        if (!ephemeralKey) {
-          throw new Error('백엔드에서 Realtime 임시 토큰을 받지 못했습니다.')
-        }
-
-        if (expiresAt && expiresAt * 1000 <= Date.now()) {
-          throw new Error('Realtime 임시 토큰이 만료되었습니다.')
-        }
-
-        if (disposed) {
-          return
-        }
-
-        // 비활성화한 마이크 트랙을 WebRTC 연결에 추가한다.
-        peerConnection = new RTCPeerConnection()
-        peerConnection.addTrack(audioTrack, mediaStream)
-
-        // DataChannel은 commit과 인식 결과 이벤트를 주고받는다.
-        dataChannel = peerConnection.createDataChannel('oai-events')
-        dataChannelRef.current = dataChannel
-        dataChannel.addEventListener('message', ({ data }) => {
-          const event = JSON.parse(data)
-
-          // 말하는 도중 전달되는 부분 문장
-          if (
-            event.type ===
-            'conversation.item.input_audio_transcription.delta'
-          ) {
-            updateSegment(event)
-          }
-
-          // 하나의 오디오 구간에 대한 최종 문장
-          if (
-            event.type ===
-            'conversation.item.input_audio_transcription.completed'
-          ) {
-            updateSegment(event, true)
-            pendingCommitCount = Math.max(0, pendingCommitCount - 1)
-            resolveFinalizationWaiters()
-          }
-
-          if (event.type === 'error' && !disposed) {
-            setError(event.error?.message ?? '음성 인식 중 오류가 발생했습니다.')
-            setStatus('error')
-          }
-        })
-
-        peerConnection.addEventListener('connectionstatechange', () => {
-          if (
-            !disposed &&
-            ['failed', 'disconnected'].includes(peerConnection.connectionState)
-          ) {
-            setError('OpenAI Realtime 연결이 종료되었습니다.')
-            setStatus('error')
-          }
-        })
-
-        // 브라우저가 만든 연결 제안(SDP)을 OpenAI에 보내 연결을 완료한다.
-        const offer = await peerConnection.createOffer()
-        await peerConnection.setLocalDescription(offer)
-
-        const sdpResponse = await fetch(OPENAI_REALTIME_URL, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${ephemeralKey}`,
-            'Content-Type': 'application/sdp',
-          },
-          body: offer.sdp,
-        })
-
-        if (!sdpResponse.ok) {
-          throw new Error(await sdpResponse.text())
-        }
-
-        await peerConnection.setRemoteDescription({
-          type: 'answer',
-          sdp: await sdpResponse.text(),
-        })
-
-        await waitForDataChannelOpen()
-
-        if (disposed) {
-          return
-        }
-
-        if (startListeningOnConnectRef.current) {
-          startVolumeMonitoring()
-          audioTrack.enabled = true
-          setStatus('listening')
+        if (isBrowserSpeechRecognitionSupported()) {
+          startBrowserTranscription()
         } else {
-          setStatus('ready')
+          listeningRequestedRef.current = startListeningOnConnectRef.current
+          await activateOpenAIFallback()
         }
       } catch (startError) {
-        if (disposed) {
-          return
-        }
-
-        cleanupVoiceResources()
-
-        if (startError.name === 'NotAllowedError') {
-          setError('마이크 사용 권한이 필요합니다.')
-          setStatus('permission-denied')
-          return
-        }
-
-        setError(startError.message || '음성 인식을 시작하지 못했습니다.')
-        setStatus('error')
+        handleTranscriptionStartError(startError)
       }
     }
 

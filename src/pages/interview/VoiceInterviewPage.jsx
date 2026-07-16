@@ -700,10 +700,10 @@ function VoiceInterviewSession({ accessToken }) {
 
   const recognitionMessage = {
     'requesting-permission': '브라우저에서 마이크 사용을 허용해주세요',
-    connecting: 'OpenAI Realtime에 연결하고 있습니다',
+    connecting: '음성 인식 엔진에 연결하고 있습니다',
     ready: '면접관의 질문을 재생하고 있습니다',
     listening: '음성을 텍스트로 변환 중입니다',
-    unsupported: '이 브라우저에서는 WebRTC를 사용할 수 없습니다',
+    unsupported: '이 브라우저에서는 음성 인식을 사용할 수 없습니다',
     'permission-denied': '브라우저의 마이크 권한을 허용해 주세요',
     error: error || '잠시 후 페이지를 새로고침해 주세요',
   }[status]
