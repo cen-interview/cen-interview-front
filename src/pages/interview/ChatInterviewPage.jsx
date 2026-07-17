@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import loadingCharacterImage from '../../assets/images/char.png'
 import mascotImage from '../../assets/images/interview-mascot.gif'
 import AppHeader from '../../components/common/AppHeader'
 import { ROUTES } from '../../constants/routes'
@@ -204,9 +205,186 @@ function ChatSessionState({ errorMessage, onRetry }) {
   )
 }
 
+function ReportGeneratingGame() {
+  const [isJumping, setIsJumping] = useState(false)
+  const [score, setScore] = useState(0)
+  const [isGameOver, setIsGameOver] = useState(false)
+  const [gameRound, setGameRound] = useState(0)
+  const jumpTimerRef = useRef(null)
+  const runnerRef = useRef(null)
+  const cactusRef = useRef(null)
+
+  const jump = useCallback(() => {
+    if (isGameOver || jumpTimerRef.current !== null) {
+      return
+    }
+
+    setIsJumping(true)
+    jumpTimerRef.current = window.setTimeout(() => {
+      setIsJumping(false)
+      jumpTimerRef.current = null
+    }, 650)
+  }, [isGameOver])
+
+  useEffect(() => {
+    if (isGameOver) {
+      return undefined
+    }
+
+    const scoreTimerId = window.setInterval(() => {
+      setScore((currentScore) => currentScore + 1)
+    }, 100)
+
+    return () => window.clearInterval(scoreTimerId)
+  }, [isGameOver])
+
+  useEffect(() => {
+    if (isGameOver) {
+      return undefined
+    }
+
+    let animationFrameId
+
+    const detectCollision = () => {
+      const runnerBox = runnerRef.current?.getBoundingClientRect()
+      const cactusBox = cactusRef.current?.getBoundingClientRect()
+
+      if (runnerBox && cactusBox) {
+        const collisionPadding = 5
+        const hasCollision =
+          runnerBox.right - collisionPadding > cactusBox.left + collisionPadding &&
+          runnerBox.left + collisionPadding < cactusBox.right - collisionPadding &&
+          runnerBox.bottom - collisionPadding > cactusBox.top + collisionPadding &&
+          runnerBox.top + collisionPadding < cactusBox.bottom - collisionPadding
+
+        if (hasCollision) {
+          setIsGameOver(true)
+          return
+        }
+      }
+
+      animationFrameId = window.requestAnimationFrame(detectCollision)
+    }
+
+    animationFrameId = window.requestAnimationFrame(detectCollision)
+
+    return () => window.cancelAnimationFrame(animationFrameId)
+  }, [gameRound, isGameOver])
+
+  useEffect(() => {
+
+    const handleKeyDown = (event) => {
+      if (event.code !== 'Space' || event.repeat) {
+        return
+      }
+
+      event.preventDefault()
+      jump()
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+
+      if (jumpTimerRef.current !== null) {
+        window.clearTimeout(jumpTimerRef.current)
+      }
+    }
+  }, [jump])
+
+  const restartGame = () => {
+    if (jumpTimerRef.current !== null) {
+      window.clearTimeout(jumpTimerRef.current)
+      jumpTimerRef.current = null
+    }
+
+    setIsJumping(false)
+    setScore(0)
+    setGameRound((currentRound) => currentRound + 1)
+    setIsGameOver(false)
+  }
+
+  return (
+    <div className="chat-interview report-generating-page">
+      <div className="chat-interview__ambient" aria-hidden="true" />
+      <AppHeader />
+
+      <main className="report-generating" aria-live="polite" aria-busy="true">
+        <p className="report-generating__eyebrow">MAKING YOUR REPORT</p>
+        <h1>면접 결과를 열심히 분석하고 있어요!</h1>
+        <p className="report-generating__description">
+          답변과 프로젝트 코드를 차근차근 비교하고 있어요.
+          <br />
+          조금만 기다리면 맞춤형 리포트가 완성됩니다.
+        </p>
+
+        <div
+          className={`dino-loader${isGameOver ? ' dino-loader--game-over' : ''}`}
+          role="button"
+          tabIndex={0}
+          aria-label="스페이스바를 누르거나 클릭해서 캐릭터 점프하기"
+          onClick={jump}
+        >
+          <output className="dino-loader__score" aria-label={`점수 ${score}`}>
+            {String(score).padStart(5, '0')}
+          </output>
+          <span className="dino-loader__cloud dino-loader__cloud--one" />
+          <span className="dino-loader__cloud dino-loader__cloud--two" />
+          <div
+            ref={runnerRef}
+            className={`dino-loader__runner${isJumping ? ' dino-loader__runner--jumping' : ''}`}
+          >
+            <img
+              className="dino-loader__character"
+              src={loadingCharacterImage}
+              alt=""
+            />
+          </div>
+          <span
+            ref={cactusRef}
+            className="dino-loader__cactus"
+            key={gameRound}
+          >
+            🌵
+          </span>
+          <span className="dino-loader__ground" />
+
+          {isGameOver && (
+            <div className="dino-loader__game-over" role="status">
+              <strong>GAME OVER</strong>
+              <span>점수 {String(score).padStart(5, '0')}</span>
+              <button type="button" onClick={restartGame}>
+                다시 시작
+              </button>
+            </div>
+          )}
+        </div>
+
+        <p className="report-generating__game-tip">
+          <kbd>SPACE</kbd>
+          를 누르거나 화면을 클릭해서 점프!
+        </p>
+
+        <div className="report-generating__steps">
+          <span>답변 정리</span>
+          <i />
+          <span>코드 비교</span>
+          <i />
+          <span>리포트 작성</span>
+        </div>
+        <p className="report-generating__notice">
+          분석에는 1분 이상 걸릴 수 있어요. 화면을 닫지 말아 주세요.
+        </p>
+      </main>
+    </div>
+  )
+}
+
 function ChatInterviewPage() {
   const [draft, setDraft] = useState('')
   const [isEndConfirmOpen, setIsEndConfirmOpen] = useState(false)
+  const [showReportLoading, setShowReportLoading] = useState(false)
   const pageEndRef = useRef(null)
   const textareaRef = useRef(null)
   const accessToken = useAuthStore((state) => state.accessToken)
@@ -221,15 +399,37 @@ function ChatInterviewPage() {
     end,
     retry,
   } = useChatInterview()
+  const isLoadingPreview =
+    new URLSearchParams(window.location.search).get('loadingPreview') === 'true'
 
   useEffect(() => {
+    const isWaitingForLongResponse =
+      phase === 'submitting' || phase === 'ending'
+
+    if (!isWaitingForLongResponse) {
+      setShowReportLoading(false)
+      return undefined
+    }
+
+    const timerId = window.setTimeout(() => {
+      setShowReportLoading(true)
+    }, 30000)
+
+    return () => window.clearTimeout(timerId)
+  }, [phase])
+
+  useEffect(() => {
+    if (isLoadingPreview) {
+      return
+    }
+
     if (!accessToken) {
       navigate(ROUTES.LOGIN, { replace: true })
       return
     }
 
     start()
-  }, [accessToken, navigate, start])
+  }, [accessToken, isLoadingPreview, navigate, start])
 
   useEffect(() => {
     pageEndRef.current?.scrollIntoView({ block: 'end' })
@@ -285,6 +485,10 @@ function ChatInterviewPage() {
     }
   }
 
+  if (isLoadingPreview) {
+    return <ReportGeneratingGame />
+  }
+
   if (!accessToken) {
     return null
   }
@@ -297,6 +501,10 @@ function ChatInterviewPage() {
     return (
       <ChatSessionState errorMessage={errorMessage} onRetry={handleRetry} />
     )
+  }
+
+  if (showReportLoading) {
+    return <ReportGeneratingGame />
   }
 
   const handleSubmit = async (event) => {

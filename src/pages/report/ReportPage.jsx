@@ -117,6 +117,92 @@ function ScoreRing({ score, tone }) {
     </div>
   )
 }
+function CodeAnalysisToggle({ analyses }) {
+  if (analyses.length === 0) {
+    return null
+  }
+
+  return (
+    <details className="code-analysis">
+      <summary>
+        <span>
+          코드 분석 보기
+          <small>프로젝트 코드 근거와 답변 평가를 확인해보세요.</small>
+        </span>
+        <b aria-hidden="true">⌄</b>
+      </summary>
+
+      <div className="code-analysis__body">
+        {analyses.map((analysis, index) => (
+          <article
+            className="code-analysis__item"
+            key={`${analysis.source_file ?? analysis.topic ?? 'analysis'}-${index}`}
+          >
+            <div className="code-analysis__heading">
+              <div>
+                <span>PROJECT</span>
+                <h4>{analysis.topic ?? '프로젝트 코드 분석'}</h4>
+              </div>
+
+              {analysis.answer_status && (
+                <div className="code-analysis__badges">
+                  <em
+                    className={`status-badge status-badge--${analysis.answer_status}`}
+                  >
+                    {analysis.answer_status}
+                  </em>
+                </div>
+              )}
+            </div>
+
+            {analysis.source_file && (
+              <p className="code-analysis__source">
+                <strong>근거 파일</strong>
+                <code>{analysis.source_file}</code>
+              </p>
+            )}
+
+            {analysis.code_assessment && (
+              <section className="code-analysis__text">
+                <h5>코드 분석</h5>
+                <p>{analysis.code_assessment}</p>
+              </section>
+            )}
+
+            {analysis.current_code && (
+              <section className="code-analysis__code-block">
+                <h5>현재 프로젝트 코드</h5>
+                <pre>
+                  <code>{analysis.current_code}</code>
+                </pre>
+              </section>
+            )}
+
+            {analysis.improvement_reason && (
+              <section className="code-analysis__text code-analysis__text--improvement">
+                <h5>개선 방향</h5>
+                <p>{analysis.improvement_reason}</p>
+              </section>
+            )}
+
+            {(analysis.references ?? []).length > 0 && (
+              <section className="code-analysis__references">
+                <h5>참고 근거</h5>
+                <ul>
+                  {analysis.references.map((reference, referenceIndex) => (
+                    <li key={`${reference}-${referenceIndex}`}>
+                      {reference}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+          </article>
+        ))}
+      </div>
+    </details>
+  )
+}
 
 function QuestionReview({ item, index }) {
   const score = clampScore(item.score)
@@ -140,7 +226,9 @@ function QuestionReview({ item, index }) {
           <h4>평가 코멘트</h4>
           <p>{item.comment}</p>
         </div>
+        <CodeAnalysisToggle analyses={item.code_analysis ?? []} />
       </div>
+   
 
       <aside className="question-score" aria-label={`${index + 1}번 답변 평가`}>
         <span className="question-score__label">평가</span>

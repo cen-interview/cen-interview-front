@@ -43,6 +43,351 @@ $page-background: #f6f9ff;
   }
 }
 
+@keyframes character-jump {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-2deg);
+  }
+
+  50% {
+    transform: translateY(-68px) rotate(4deg);
+  }
+}
+
+@keyframes cactus-run {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(-620px);
+  }
+}
+
+@keyframes cloud-drift {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(-540px);
+  }
+}
+
+@keyframes ground-scroll {
+  to {
+    background-position-x: -32px;
+  }
+}
+
+@keyframes report-step-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+.report-generating-page {
+  background:
+    radial-gradient(circle at 50% 22%, rgba(#dcecff, 0.9), transparent 34%),
+    linear-gradient(180deg, #f4f9ff 0%, #eef6ff 100%);
+}
+
+.report-generating {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  width: min(760px, calc(100% - 40px));
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  padding: 54px 0 80px;
+  text-align: center;
+
+  &__eyebrow {
+    margin: 0 0 10px;
+    color: $bright-blue;
+    font-size: 12px;
+    font-weight: 900;
+    letter-spacing: 0.16em;
+  }
+
+  h1 {
+    margin: 0;
+    color: $ink;
+    font-size: clamp(25px, 4vw, 38px);
+    line-height: 1.35;
+  }
+
+  &__description {
+    margin: 16px 0 0;
+    color: $muted;
+    font-size: 15px;
+    line-height: 1.7;
+  }
+
+  &__steps {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 26px;
+    color: #42638c;
+    font-size: 12px;
+    font-weight: 800;
+
+    i {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: #8dbcf0;
+      animation: report-step-pulse 1.4s ease-in-out infinite;
+
+      &:last-of-type {
+        animation-delay: 0.35s;
+      }
+    }
+  }
+
+  &__notice {
+    margin: 16px 0 0;
+    padding: 10px 15px;
+    border-radius: 999px;
+    color: #66809f;
+    background: rgba(white, 0.76);
+    font-size: 12px;
+    font-weight: 650;
+  }
+
+  &__game-tip {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: 12px 0 0;
+    color: #557493;
+    font-size: 12px;
+    font-weight: 750;
+
+    kbd {
+      padding: 4px 9px;
+      border: 1px solid #aac9e9;
+      border-bottom-width: 3px;
+      border-radius: 7px;
+      color: #245e9d;
+      background: white;
+      font-family: inherit;
+      font-size: 10px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+    }
+  }
+}
+
+.dino-loader {
+  position: relative;
+  width: min(620px, 100%);
+  height: 190px;
+  margin-top: 24px;
+  overflow: hidden;
+  border: 1px solid #cfe3fa;
+  border-radius: 24px;
+  background:
+    linear-gradient(180deg, rgba(white, 0.95), rgba(#eaf5ff, 0.88));
+  box-shadow: 0 20px 50px -34px rgba(#244d82, 0.5);
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+
+  &:focus-visible {
+    box-shadow:
+      0 0 0 4px rgba($bright-blue, 0.16),
+      0 20px 50px -34px rgba(#244d82, 0.5);
+  }
+
+  &--game-over {
+    .dino-loader__runner,
+    .dino-loader__cactus,
+    .dino-loader__cloud,
+    .dino-loader__ground {
+      animation-play-state: paused;
+    }
+  }
+
+  &__score {
+    position: absolute;
+    z-index: 5;
+    top: 16px;
+    right: 20px;
+    color: #42638c;
+    font-family: monospace;
+    font-size: 16px;
+    font-weight: 900;
+    letter-spacing: 0.12em;
+  }
+
+  &__runner {
+    position: absolute;
+    z-index: 3;
+    bottom: 27px;
+    left: 70px;
+
+    &--jumping {
+      animation: character-jump 650ms ease-out;
+    }
+  }
+
+  &__character {
+    display: block;
+    width: 76px;
+    height: 76px;
+    border-radius: 20px;
+    filter: drop-shadow(0 7px 3px rgba(#3d648d, 0.14));
+    object-fit: cover;
+  }
+
+  &__cactus {
+    position: absolute;
+    z-index: 2;
+    right: -70px;
+    bottom: 31px;
+    font-size: 23px;
+    animation: cactus-run 2.2s linear infinite;
+  }
+
+  &__ground {
+    position: absolute;
+    right: 0;
+    bottom: 25px;
+    left: 0;
+    height: 3px;
+    background: repeating-linear-gradient(
+      90deg,
+      #91b9e3 0 14px,
+      transparent 14px 23px
+    );
+    animation: ground-scroll 0.5s linear infinite;
+  }
+
+  &__cloud {
+    position: absolute;
+    width: 52px;
+    height: 14px;
+    border-radius: 999px;
+    background: #d4e9fc;
+
+    &::before,
+    &::after {
+      position: absolute;
+      bottom: 0;
+      border-radius: 50%;
+      background: inherit;
+      content: '';
+    }
+
+    &::before {
+      left: 10px;
+      width: 22px;
+      height: 22px;
+    }
+
+    &::after {
+      right: 7px;
+      width: 17px;
+      height: 17px;
+    }
+
+    &--one {
+      top: 50px;
+      right: -70px;
+      animation: cloud-drift 8s linear infinite;
+    }
+
+    &--two {
+      top: 89px;
+      right: -210px;
+      opacity: 0.65;
+      transform: scale(0.75);
+      animation: cloud-drift 11s linear 2s infinite;
+    }
+  }
+
+  &__game-over {
+    position: absolute;
+    z-index: 10;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(#f7fbff, 0.82);
+    backdrop-filter: blur(3px);
+
+    strong {
+      color: #234f83;
+      font-family: monospace;
+      font-size: 25px;
+      letter-spacing: 0.08em;
+    }
+
+    span {
+      margin-top: 7px;
+      color: #587696;
+      font-family: monospace;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    button {
+      margin-top: 14px;
+      padding: 8px 15px;
+      border: 1px solid #8bb9e8;
+      border-radius: 9px;
+      color: white;
+      background: $bright-blue;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 850;
+
+      &:hover {
+        background: color.adjust($bright-blue, $lightness: -7%);
+      }
+    }
+  }
+}
+
+@media (max-width: 600px) {
+  .report-generating {
+    padding-top: 30px;
+
+    &__description br {
+      display: none;
+    }
+
+    &__steps {
+      gap: 7px;
+    }
+  }
+
+  .dino-loader {
+    height: 170px;
+
+    &__runner {
+      left: 35px;
+    }
+
+    &__character {
+      width: 68px;
+      height: 68px;
+    }
+  }
+}
+
 .chat-interview {
   position: relative;
   display: flex;
