@@ -729,7 +729,7 @@ function VoiceInterviewSession({ accessToken }) {
       return
     }
 
-    // Web Speech 음성을 준비하고, 미지원 환경에서는 고정 리액션 TTS를 선제 생성한다.
+    // 질문 재생 전에 백엔드의 고정 음성으로 리액션 TTS를 선제 생성한다.
     void warmSpeechCache(REACTION_PHRASES)
   }, [session?.session_id, warmSpeechCache])
 
@@ -1150,6 +1150,13 @@ function VoiceInterviewSession({ accessToken }) {
           )
         })}
 
+        {confirmationTurn && (
+          <VoiceConversationTurn
+            turn={confirmationTurn}
+            onStreamComplete={handleReactionStreamComplete}
+          />
+        )}
+
         <section
           className="live-answer"
           aria-label="실시간 답변 내용"
@@ -1194,13 +1201,6 @@ function VoiceInterviewSession({ accessToken }) {
             </p>
           )}
         </section>
-
-        {confirmationTurn && (
-          <VoiceConversationTurn
-            turn={confirmationTurn}
-            onStreamComplete={handleReactionStreamComplete}
-          />
-        )}
       </main>
 
       <section className="voice-status" aria-label="인터뷰 음성 상태">
