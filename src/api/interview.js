@@ -77,10 +77,16 @@ export const sendChatEvent = async (
   clientEventId,
 ) => {
   const encodedSessionId = encodeURIComponent(sessionId)
-  const response = await apiClient.post(`/sessions/${encodedSessionId}/events`, {
-    payload,
-    client_event_id: clientEventId,
-  })
+  const response = await apiClient.post(
+    `/sessions/${encodedSessionId}/events`,
+    {
+      payload,
+      client_event_id: clientEventId,
+    },
+    {
+      timeout: 120000,
+    },
+  )
 
   return response.data
 }
