@@ -1,9 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiClient } from '../api/client'
-import {
-  createBrowserSpeechRecognition,
-  isBrowserSpeechRecognitionSupported,
-} from '../features/interview/browserSpeechRecognition.js'
 
 const OPENAI_REALTIME_URL = 'https://api.openai.com/v1/realtime/calls'
 // 소리로 인정할 최소 볼륨 기준
@@ -18,60 +14,6 @@ const BARGE_IN_THRESHOLD = 0.035
 const BARGE_IN_GRACE_MS = 350
 // 순간 소음이 아니라 실제 발화로 판단하기 위한 최소 연속 시간이다.
 const BARGE_IN_HOLD_MS = 120
-
-/**
- * 현재 브라우저가 모바일 기기에서 실행 중인지 확인한다.
- *
- * Chromium의 User-Agent Client Hints가 모바일 여부를 제공하면 우선 사용한다.
- * 지원하지 않는 브라우저와 iPadOS의 데스크톱 모드에서는 기존 user agent와
- * 터치 입력 정보를 함께 확인한다.
- *
- * @returns {boolean} 모바일 브라우저 환경이면 true
- */
-const isMobileBrowser = () => {
-  if (typeof navigator === 'undefined') {
-    return false
-  }
-
-  const mobileClientHint = navigator.userAgentData?.mobile === true
-  const mobileUserAgent = /Android|iPhone|iPad|iPod/i.test(
-    navigator.userAgent,
-  )
-  const iPadDesktopMode =
-    /Macintosh/i.test(navigator.userAgent) && navigator.maxTouchPoints > 1
-
-  return mobileClientHint || mobileUserAgent || iPadDesktopMode
-}
-
-/**
- * 이전 문장의 끝과 새 인식 cycle의 시작에 중복된 어절을 제거한다.
- *
- * 브라우저 SpeechRecognition을 중지한 뒤 다시 시작하면 직전 문장의 종결부가
- * 새 cycle의 첫 결과에 다시 포함될 수 있다. 글자 단위가 아니라 공백으로
- * 구분한 어절 단위로만 비교해 우연히 같은 일부 글자가 삭제되지 않게 한다.
- *
- * @param {string} previousText 새 cycle이 시작되기 전까지 누적된 문장
- * @param {string} currentText 새 cycle에서 받은 첫 segment 문장
- * @returns {string} 앞부분의 중복 어절을 제거한 새 segment 문장
- */
-const removeLeadingWordOverlap = (previousText, currentText) => {
-  const previousWords = previousText.trim().split(/\s+/).filter(Boolean)
-  const currentWords = currentText.trim().split(/\s+/).filter(Boolean)
-  const maxOverlap = Math.min(previousWords.length, currentWords.length)
-
-  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-    const previousStart = previousWords.length - overlap
-    const hasSameBoundary = currentWords
-      .slice(0, overlap)
-      .every((word, index) => word === previousWords[previousStart + index])
-
-    if (hasSameBoundary) {
-      return currentWords.slice(overlap).join(' ')
-    }
-  }
-
-  return currentWords.join(' ')
-}
 
 /**
  * 문장 끝에서 STT가 연속으로 반환한 동일한 종결 어절을 하나로 축약한다.
@@ -104,14 +46,13 @@ const removeRepeatedSentenceEnding = (text) => {
 }
 
 /**
- * 브라우저 우선 STT와 OpenAI Realtime 폴백, 발화 구간을 관리한다.
+ * OpenAI Realtime STT 연결과 발화 구간을 관리한다.
  *
  * 화면용 누적 transcript 외에 Voice Turn WebSocket에서 사용할 수 있는 누적
  * 전사 snapshot과 실제 발화 시작·종료 snapshot을 만든다. callback은 Ref로
  * 보관하므로 호출하는 컴포넌트가 다시 렌더링돼도 음성 인식 연결을 재생성하지
- * 않는다. 데스크톱에서는 SpeechRecognition을 우선 사용하고, 모바일이거나
- * SpeechRecognition 실행 중 치명적 오류가 나면 OpenAI Realtime WebRTC
- * 연결을 만든다.
+ * 않는다. 마이크 권한과 음성 면접 세션이 준비되면 OpenAI Realtime WebRTC
+ * 연결을 만들고 모든 환경에서 동일한 전사 엔진을 사용한다.
  *
  * @param {{
  *   onPermissionGranted?: () => Promise<object>,
@@ -238,7 +179,7 @@ function useRealtimeTranscription({
   }, [])
 
   useEffect(() => {
-    // 페이지를 벗어날 때 정리해야 하는 브라우저 음성·통신 자원
+    // 페이지를 벗어날 때 정리해야 하는 마이크·Realtime 통신 자원
     let disposed = false
     let peerConnection
     let dataChannel
@@ -248,8 +189,6 @@ function useRealtimeTranscription({
     let analyser
     let samples
     let animationFrameId
-    let recognitionController
-    let transcriptionEngine = ''
     let openAITranscriptionPromise = null
 
     const segments = new Map()
@@ -388,50 +327,23 @@ function useRealtimeTranscription({
       updateTranscript(itemId, isCompleted)
     }
 
-    // 브라우저 STT의 interim/final 결과를 Realtime과 같은 segment 구조로 맞춘다.
-    const updateBrowserSegment = ({ itemId, cycle, transcript, isFinal }) => {
-      if (!segments.has(itemId)) {
-        const isFirstSegmentInCycle = ![...segments.values()].some(
-          (segment) => segment.browserCycle === cycle,
-        )
-
-        segments.set(itemId, {
-          order: segmentOrder,
-          text: '',
-          browserCycle: cycle,
-          boundaryBaseText: isFirstSegmentInCycle ? buildTranscript() : '',
-        })
-        segmentOrder += 1
-      }
-
-      const segment = segments.get(itemId)
-      segment.text = segment.boundaryBaseText
-        ? removeLeadingWordOverlap(segment.boundaryBaseText, transcript)
-        : transcript
-      updateTranscript(itemId, isFinal)
-    }
-
-    // 로컬 VAD가 선택된 STT 엔진의 현재 오디오 또는 인식 cycle을 확정한다.
+    // 로컬 VAD가 현재 Realtime 오디오 구간을 확정한다.
     const commitAudio = ({ preserveActivity = false } = {}) => {
       if (!bufferHasSpeech) {
         return false
       }
 
-      if (transcriptionEngine === 'browser') {
-        recognitionController?.commit()
-      } else {
-        if (dataChannel?.readyState !== 'open') {
-          return false
-        }
-
-        dataChannel.send(
-          JSON.stringify({
-            type: 'input_audio_buffer.commit',
-          }),
-        )
-
-        pendingCommitCount += 1
+      if (dataChannel?.readyState !== 'open') {
+        return false
       }
+
+      dataChannel.send(
+        JSON.stringify({
+          type: 'input_audio_buffer.commit',
+        }),
+      )
+
+      pendingCommitCount += 1
 
       bufferHasSpeech = false
       speechStartedAt = 0
@@ -571,18 +483,6 @@ function useRealtimeTranscription({
         audioTrack.enabled = false
       }
 
-      if (transcriptionEngine === 'browser') {
-        const browserFinalization = recognitionController?.finalize()
-        stopVolumeMonitoring()
-
-        if (!disposed) {
-          setStatus('ready')
-        }
-
-        await browserFinalization
-        return transcriptValue.trim()
-      }
-
       commitAudio()
       stopVolumeMonitoring()
 
@@ -643,10 +543,9 @@ function useRealtimeTranscription({
       })
     }
 
-    // 연결 실패나 페이지 이탈 시 브라우저 음성·통신 자원을 한곳에서 정리한다.
+    // 연결 실패나 페이지 이탈 시 마이크·Realtime 자원을 한곳에서 정리한다.
     const cleanupVoiceResources = () => {
       stopVolumeMonitoring()
-      recognitionController?.destroy()
 
       audioTrack?.stop()
       mediaStream?.getTracks().forEach((track) => {
@@ -697,13 +596,12 @@ function useRealtimeTranscription({
         throw new Error('이 브라우저에서는 WebRTC를 사용할 수 없습니다.')
       }
 
-      transcriptionEngine = 'openai'
       transcriptionReadyRef.current = false
       startTranscriptionCaptureRef.current = () => true
       stopTranscriptionCaptureRef.current = () => {}
       setStatus('connecting')
 
-      // 모바일 또는 브라우저 STT 실패로 OpenAI 엔진을 선택하면 단기 토큰을 발급한다.
+      // Realtime WebRTC 연결에 사용할 단기 토큰을 백엔드에서 발급한다.
       const tokenResponse = await apiClient.post(
         '/interview/realtime-transcription/token',
       )
@@ -806,48 +704,15 @@ function useRealtimeTranscription({
         return openAITranscriptionPromise
       }
 
-      recognitionController?.destroy()
-      recognitionController = null
       transcriptionReadyRef.current = false
 
       openAITranscriptionPromise = startOpenAIRealtimeTranscription().catch(
-        (fallbackError) => {
-          handleTranscriptionStartError(fallbackError)
+        (connectionError) => {
+          handleTranscriptionStartError(connectionError)
         },
       )
 
       return openAITranscriptionPromise
-    }
-
-    const startBrowserTranscription = () => {
-      transcriptionEngine = 'browser'
-      recognitionController = createBrowserSpeechRecognition({
-        onResult: updateBrowserSegment,
-        onFatalError: () => {
-          void activateOpenAITranscription()
-        },
-      })
-      startTranscriptionCaptureRef.current = () => {
-        return recognitionController?.start() ?? false
-      }
-      stopTranscriptionCaptureRef.current = () => {
-        recognitionController?.pause()
-      }
-      transcriptionReadyRef.current = true
-      setError('')
-
-      if (startListeningOnConnectRef.current) {
-        listeningRequestedRef.current = true
-        audioTrack.enabled = true
-        const recognitionStarted = recognitionController.start()
-        startVolumeMonitoring()
-
-        if (recognitionStarted && transcriptionEngine === 'browser') {
-          setStatus('listening')
-        }
-      } else {
-        setStatus('ready')
-      }
     }
 
     const startTranscription = async () => {
@@ -891,15 +756,8 @@ function useRealtimeTranscription({
           return
         }
 
-        const shouldUseBrowserSpeechRecognition =
-          !isMobileBrowser() && isBrowserSpeechRecognitionSupported()
-
-        if (shouldUseBrowserSpeechRecognition) {
-          startBrowserTranscription()
-        } else {
-          listeningRequestedRef.current = startListeningOnConnectRef.current
-          await activateOpenAITranscription()
-        }
+        listeningRequestedRef.current = startListeningOnConnectRef.current
+        await activateOpenAITranscription()
       } catch (startError) {
         handleTranscriptionStartError(startError)
       }

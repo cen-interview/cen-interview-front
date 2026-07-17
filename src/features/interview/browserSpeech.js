@@ -1,5 +1,14 @@
 const KOREAN_LANGUAGE = 'ko-KR'
 const VOICE_LOAD_TIMEOUT_MS = 1000
+const MALE_VOICE_PITCH = 0.9
+const KOREAN_MALE_VOICE_KEYWORDS = [
+  'injoon',
+  // 'hyunsu',
+  // 'bongjin',
+  // 'gookmin',
+  // 'male',
+  // '남성',
+]
 
 let activeSpeech = null
 let voicePreparation = null
@@ -30,6 +39,14 @@ const normalizeLanguage = (language) => {
   return language?.trim().replace('_', '-').toLowerCase() || ''
 }
 
+const isKoreanMaleVoice = (voice) => {
+  const normalizedName = voice.name?.trim().toLowerCase() || ''
+
+  return KOREAN_MALE_VOICE_KEYWORDS.some((keyword) => {
+    return normalizedName.includes(keyword)
+  })
+}
+
 const selectKoreanVoice = () => {
   const koreanVoices = getAvailableVoices().filter((voice) => {
     return normalizeLanguage(voice.lang).startsWith('ko')
@@ -45,10 +62,13 @@ const selectKoreanVoice = () => {
         normalizeLanguage(voice.lang) === normalizeLanguage(KOREAN_LANGUAGE)
           ? 4
           : 0
+      const maleVoiceScore = isKoreanMaleVoice(voice) ? 100 : 0
       const localServiceScore = voice.localService ? 2 : 0
       const defaultScore = voice.default ? 1 : 0
 
-      return languageScore + localServiceScore + defaultScore
+      return (
+        maleVoiceScore + languageScore + localServiceScore + defaultScore
+      )
     }
 
     return scoreVoice(right) - scoreVoice(left)
@@ -170,9 +190,9 @@ export const prepareBrowserSpeech = () => {
 /**
  * 텍스트 한 문장을 Web Speech API로 재생한다.
  *
- * 한국어 로컬 음성이 있으면 우선 선택하고, 별도 음성이 없으면 ko-KR 언어
- * 설정과 브라우저 기본 음성을 사용한다. 새 발화가 시작되면 Web Speech의
- * 전역 큐에 남은 이전 발화를 정리한다.
+ * 한국어 남성 음성이 있으면 우선 선택하고, 별도 음성이 없으면 ko-KR
+ * 언어 설정과 낮은 음높이를 적용한 브라우저 기본 음성을 사용한다. 새 발화가
+ * 시작되면 Web Speech의 전역 큐에 남은 이전 발화를 정리한다.
  *
  * @param {string} text 재생할 면접관 발화
  * @param {{ ownerId: symbol, onStart?: () => void }} options 재생 소유자와 시작 callback
@@ -193,6 +213,7 @@ export const speakWithBrowserSpeech = (text, { ownerId, onStart } = {}) => {
   const utterance = new window.SpeechSynthesisUtterance(text)
   const koreanVoice = selectKoreanVoice()
   utterance.lang = KOREAN_LANGUAGE
+  utterance.pitch = MALE_VOICE_PITCH
 
   if (koreanVoice) {
     utterance.voice = koreanVoice

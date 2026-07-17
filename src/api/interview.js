@@ -33,11 +33,11 @@ export const startVoiceInterview = async () => {
 }
 
 /**
- * Web Speech 폴백용 발화 텍스트를 백엔드 TTS로 전달하고 MP3 Blob을 반환한다.
+ * 면접관 발화 텍스트를 백엔드 OpenAI TTS로 전달하고 MP3 Blob을 반환한다.
  *
- * 기본 재생은 브라우저의 Web Speech API를 사용한다. Web Speech를 지원하지
- * 않거나 실제 합성에 실패한 환경에서만 이 API를 호출한다. OpenAI API 키와
- * 모델 설정은 백엔드가 관리하고, 반환된 오디오는 Object URL로 바꿔 재생한다.
+ * 브라우저별 음성 차이를 없애기 위해 모든 면접관 발화가 이 API를 사용한다.
+ * OpenAI API 키와 모델·음성 설정은 백엔드가 관리하고, 반환된 오디오는
+ * Object URL로 바꿔 재생한다.
  *
  * @param {string} text 음성으로 재생할 면접관 발화
  * @param {{ signal?: AbortSignal }} [options] 화면 이탈이나 재생 교체 시 요청을 취소하기 위한 옵션
