@@ -65,6 +65,8 @@ function useVoiceTurnController({
   const automaticallyCommittedQuestionsRef = useRef(new Set())
   const playedReactionQuestionsRef = useRef(new Set())
   const cancelledConfirmationIdsRef = useRef(new Set())
+  const submissionSequenceRef = useRef(0)
+  const activeSubmissionRef = useRef(null)
   const previousSocketStatusRef = useRef(socketStatus)
   const reconnectPendingRef = useRef(false)
   const phaseBeforeReconnectRef = useRef('idle')
@@ -271,7 +273,10 @@ function useVoiceTurnController({
 
   useEffect(() => {
     automaticallyCommittedQuestionsRef.current.clear()
+    playedReactionQuestionsRef.current.clear()
     cancelledConfirmationIdsRef.current.clear()
+    submissionSequenceRef.current = 0
+    activeSubmissionRef.current = null
   }, [sessionId])
 
   useEffect(() => {
@@ -376,6 +381,7 @@ function useVoiceTurnController({
       if (
         phaseRef.current !== 'confirmation_response' ||
         !activeConfirmation ||
+        !activeConfirmation.responseReady ||
         activeConfirmation.responded ||
         !snapshot.segmentFinal ||
         !responseText
@@ -528,6 +534,23 @@ function useVoiceTurnController({
         return
       }
 
+      if (
+        phaseRef.current === 'confirmation_response' &&
+        activeConfirmation?.responseReady &&
+        !activeConfirmation.responded &&
+        socketReadyRef.current &&
+        questionIdRef.current
+      ) {
+        sendMessage({
+          type: 'turn.confirmation.response.activity.changed',
+          confirmation_id: activeConfirmation.confirmationId,
+          question_id: questionIdRef.current,
+          revision: activeConfirmation.baseRevision,
+          speech_active: nextSpeechActive,
+        })
+        return
+      }
+
       if (modeRef.current === 'answer') {
         if (nextSpeechActive) {
           deliveryMetricsTrackerRef.current.startSpeaking(activityChangedAt)
@@ -616,11 +639,14 @@ function useVoiceTurnController({
 
   const handleConfirmationRequested = useCallback(
     async (message) => {
+      const currentConfirmation = confirmationRef.current
+
       if (
         message.question_id !== questionIdRef.current ||
         message.revision !== revisionRef.current ||
         manualSubmissionRef.current ||
-        cancelledConfirmationIdsRef.current.has(message.confirmation_id)
+        cancelledConfirmationIdsRef.current.has(message.confirmation_id) ||
+        currentConfirmation?.confirmationId === message.confirmation_id
       ) {
         return
       }
@@ -628,6 +654,7 @@ function useVoiceTurnController({
       clearInitialSilenceTimer()
       clearPendingTranscript()
       deliveryMetricsTrackerRef.current.suspend()
+      setErrorMessage('')
       const nextConfirmation = {
         confirmationId: message.confirmation_id,
         baseRevision: message.revision,
@@ -635,6 +662,8 @@ function useVoiceTurnController({
         text: message.text,
         responseText: '',
         responseRevision: null,
+        responseReady: false,
+        playbackStatus: null,
         responded: false,
       }
       confirmationRef.current = nextConfirmation
@@ -645,7 +674,7 @@ function useVoiceTurnController({
 
       startBargeInDetection()
 
-      await playConfirmation([message.text])
+      const playedToEnd = await playConfirmation([message.text])
 
       if (
         confirmationRef.current?.confirmationId !== message.confirmation_id ||
@@ -656,8 +685,39 @@ function useVoiceTurnController({
 
       clearAudioBuffer()
       resetTranscript()
-      resumeListening()
+      const listeningStarted = resumeListening()
+
+      if (!listeningStarted) {
+        pauseListening()
+        setErrorMessage('확인 응답을 위한 음성 인식을 시작하지 못했습니다.')
+        updatePhase('confirmation_error')
+        return
+      }
+
       updatePhase('confirmation_response')
+      const playbackStatus = playedToEnd ? 'completed' : 'failed'
+      const readySent = sendMessage({
+        type: 'turn.confirmation.response.ready',
+        confirmation_id: message.confirmation_id,
+        question_id: message.question_id,
+        revision: message.revision,
+        playback_status: playbackStatus,
+      })
+
+      if (!readySent) {
+        pauseListening()
+        setErrorMessage('확인 응답 준비 상태를 서버에 전달하지 못했습니다.')
+        updatePhase('confirmation_error')
+        return
+      }
+
+      const readyConfirmation = {
+        ...nextConfirmation,
+        responseReady: true,
+        playbackStatus,
+      }
+      confirmationRef.current = readyConfirmation
+      setConfirmation(readyConfirmation)
     },
     [
       clearAudioBuffer,
@@ -667,6 +727,7 @@ function useVoiceTurnController({
       playConfirmation,
       resetTranscript,
       resumeListening,
+      sendMessage,
       startBargeInDetection,
       updatePhase,
     ],
@@ -814,6 +875,13 @@ function useVoiceTurnController({
         }
 
         playedReactionQuestionsRef.current.add(message.question_id)
+        submissionSequenceRef.current += 1
+        const submissionIndex = submissionSequenceRef.current
+        activeSubmissionRef.current = {
+          questionId: message.question_id,
+          revision: message.revision,
+          submissionIndex,
+        }
         clearInitialSilenceTimer()
         clearPendingTranscript()
         deliveryMetricsTrackerRef.current.suspend()
@@ -823,6 +891,7 @@ function useVoiceTurnController({
         updatePhase('committing')
         void playAnswerReaction({
           ...message,
+          submission_index: submissionIndex,
           answer_text: answerTextRef.current,
         })
         return
@@ -864,6 +933,20 @@ function useVoiceTurnController({
       }
 
       if (message.type === 'answer.committed') {
+        const activeSubmission = activeSubmissionRef.current
+        let submissionIndex
+
+        if (
+          activeSubmission?.questionId === message.question_id &&
+          activeSubmission?.revision === message.revision
+        ) {
+          submissionIndex = activeSubmission.submissionIndex
+        } else {
+          submissionSequenceRef.current += 1
+          submissionIndex = submissionSequenceRef.current
+        }
+
+        activeSubmissionRef.current = null
         clearInitialSilenceTimer()
         clearPendingTranscript()
         deliveryMetricsTrackerRef.current.suspend()
@@ -872,7 +955,12 @@ function useVoiceTurnController({
         pauseListening()
         stopConfirmation()
         updatePhase('committing')
-        onSessionCommitted(message.session)
+        onSessionCommitted(message.session, {
+          questionId: message.question_id,
+          revision: message.revision,
+          submissionIndex,
+          answerText: answerTextRef.current,
+        })
       }
     },
     [
@@ -895,15 +983,34 @@ function useVoiceTurnController({
 
   const startQuestion = useCallback(() => {
     clearInitialSilenceTimer()
+    clearPendingTranscript()
+    resetTranscript()
+    revisionRef.current = 0
+    answerTextRef.current = ''
+    speechActiveRef.current = false
     manualSubmissionRef.current = false
     modeRef.current = 'answer'
+    confirmationRef.current = null
+    lastSentAtRef.current = 0
+    lastSentSnapshotRef.current = null
     syncBlockedRef.current = false
     disconnectedSnapshotDirtyRef.current = false
     hasSpokenRef.current = false
+    automaticallyCommittedQuestionsRef.current.delete(questionIdRef.current)
+    playedReactionQuestionsRef.current.delete(questionIdRef.current)
     deliveryMetricsTrackerRef.current.reset(questionIdRef.current)
+    setRevision(0)
+    setAnswerText('')
+    setSpeechActive(false)
+    setConfirmation(null)
     setErrorMessage('')
     updatePhase('listening')
-  }, [clearInitialSilenceTimer, updatePhase])
+  }, [
+    clearInitialSilenceTimer,
+    clearPendingTranscript,
+    resetTranscript,
+    updatePhase,
+  ])
 
   const beginManualSubmission = useCallback(() => {
     if (
