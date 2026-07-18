@@ -207,7 +207,10 @@ function CodeAnalysisToggle({ analyses }) {
 function QuestionReview({ item, index }) {
   const score = clampScore(item.score)
   const { level, tone } = getScorePresentation(score)
-  const points = getEvaluationPoints(item)
+  const points =
+    item.feedback_keywords?.length > 0
+      ? item.feedback_keywords
+      : getEvaluationPoints(item)
 
   return (
     <article className="question-review">
